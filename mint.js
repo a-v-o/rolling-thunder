@@ -57,7 +57,7 @@ export async function getMintPayload(
         `Fetch failed for ${walletAddress}: ${error.message}. ${retries} retries left. Retrying in 1s...`,
       );
       await sleep(1000);
-      return getMintPayload(walletAddress, slug, retries - 1);
+      return getMintPayload(walletAddress, quantity, slug, retries - 1);
     } else {
       throw new Error(`Failed to fetch mint payload: ${error.message}`);
     }
@@ -101,7 +101,7 @@ export async function sendTx(txData, privateKey, provider, chainId, nonce) {
   };
 }
 
-export async function waitForMint(mintTimeISO, chatId) {
+export async function waitForMint(mintTimeISO, chatId, slug) {
   const mintTime = new Date(mintTimeISO).getTime();
 
   await bot.api.sendMessage(chatId, `Mint scheduled for ${mintTimeISO}`);
@@ -197,7 +197,7 @@ export async function mintWithWallets(
   );
 
   if (scheduleTime) {
-    await waitForMint(scheduleTime.toISOString(), chatId);
+    await waitForMint(scheduleTime.toISOString(), chatId, slug);
   }
 
   const mintPromises = preparedWallets.map((wallet) =>
