@@ -16,6 +16,16 @@ dotenv.config();
 
 export const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
 
+const express = require("express");
+
+const app = express();
+
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("Server is running and bot is polling!");
+});
+
 const agenda = new Agenda({
   backend: new MongoBackend({
     address: process.env.MONGODB_URI,
@@ -255,6 +265,10 @@ bot.on("message:text", async (ctx) => {
       return;
     }
   }
+});
+
+app.listen(PORT, () => {
+  console.log(`Express server listening on port ${PORT}`);
 });
 
 bot.catch((err) => {
