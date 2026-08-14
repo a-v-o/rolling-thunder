@@ -11,12 +11,11 @@ import {
 } from "./lib/mintSession.js";
 import { START_TEXT, HELP_TEXT, UNSUPPORTED_TEXT } from "./lib/messages.js";
 import { mintWithWallets } from "./mint.js";
+import express from "express";
 
 dotenv.config();
 
 export const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
-
-const express = require("express");
 
 const app = express();
 
