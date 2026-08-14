@@ -241,13 +241,13 @@ bot.on("message:text", async (ctx) => {
         }
 
         // Schedule the mint job
-        await agenda.schedule(scheduleTime, "mint", {
+        await agenda.schedule(firingTime, "mint", {
           encryptedKeys,
           slug,
           quantity: session.quantity,
           chain: session.chain,
           chatId,
-          firingTime,
+          scheduleTime,
         });
 
         const formattedTime = scheduleTime.toLocaleString();
