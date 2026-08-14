@@ -1,0 +1,265 @@
+import dotenv from "dotenv";
+import { Bot } from "grammy";
+import { Menu } from "@grammyjs/menu";
+import { Agenda } from "agenda";
+import { MongoBackend } from "@agendajs/mongo-backend";
+import { encryptPrivateKey, decryptPrivateKey } from "./lib/crypto.js";
+import {
+  startMintSession,
+  getMintSession,
+  clearMintSession,
+} from "./lib/mintSession.js";
+import { START_TEXT, HELP_TEXT, UNSUPPORTED_TEXT } from "./lib/messages.js";
+import { mintWithWallets } from "./mint.js";
+
+dotenv.config();
+
+export const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
+
+const agenda = new Agenda({
+  backend: new MongoBackend({
+    address: process.env.MONGODB_URI,
+    collection: "agendaJobs",
+  }),
+  processEvery: "15 seconds",
+  removeOnComplete: true,
+});
+
+agenda.define("mint", async (job) => {
+  const { encryptedKeys, slug, quantity, chain, chatId, scheduleTime } =
+    job.attrs.data;
+  bot.api.sendMessage(chatId, "Starting scheduled mint execution...");
+  try {
+    // Decrypt private keys
+    const privateKeys = encryptedKeys.map((encryptedKey) =>
+      decryptPrivateKey(encryptedKey),
+    );
+    const overall = await mintWithWallets(
+      privateKeys,
+      slug,
+      quantity,
+      chain,
+      chatId,
+      scheduleTime,
+    );
+    overall.forEach((result) => {
+      if (result.success) {
+        bot.api.sendMessage(
+          chatId,
+          `• ${result.privateKey.slice(0, 10)}... : OK (${result.hash} @ ${result.block})`,
+        );
+      } else {
+        bot.api.sendMessage(
+          chatId,
+          `• ${result.privateKey.slice(0, 10)}... : FAIL (${result.error})`,
+        );
+      }
+    });
+    await bot.api.sendMessage(chatId, "Mint execution completed!");
+  } catch (error) {
+    await bot.api.sendMessage(chatId, `Mint failed: ${error.message}`);
+  }
+});
+
+await agenda.start();
+
+const mainMenu = new Menu("main-menu");
+
+mainMenu
+  .text("Mint", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    startMintSession(chatId, "wallet");
+    await ctx.reply(
+      "Please send your private key(s), one per line.\nSend /cancel to stop.",
+    );
+  })
+  .row();
+
+// mainMenu
+//   .text("List", async (ctx) => {
+
+//   })
+//   .row();
+
+mainMenu
+  .text("Help", async (ctx) => {
+    await ctx.reply(HELP_TEXT);
+  })
+  .row();
+
+bot.use(mainMenu);
+
+bot.command("start", async (ctx) => {
+  await ctx.reply(START_TEXT, { reply_markup: mainMenu });
+});
+
+bot.on("message:text", async (ctx) => {
+  const text = ctx.message.text?.trim();
+  if (!text) return;
+
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  const session = getMintSession(chatId);
+  if (session) {
+    if (text.startsWith("/")) {
+      if (text.toLowerCase() === "/cancel") {
+        clearMintSession(chatId);
+        await ctx.reply("Mint request canceled.");
+      }
+      return;
+    }
+
+    if (session.step === "wallet") {
+      const keys = text
+        .split("\n")
+        .map((key) => key.trim())
+        .filter((key) => key.length > 0);
+
+      const validKeys = keys.filter((key) => key.length >= 64);
+
+      if (validKeys.length === 0) {
+        await ctx.reply(
+          "No valid private keys found. Please send private keys (at least 64 characters), one per line.",
+        );
+        return;
+      }
+
+      // Encrypt private keys
+      const encryptedKeys = validKeys.map((key) => encryptPrivateKey(key));
+      session.encryptedKeys = encryptedKeys;
+      session.step = "chain";
+
+      await ctx.reply(
+        `Imported ${validKeys.length} wallet(s).\nNow send the target chain for minting (for example: ethereum, polygon, base).`,
+      );
+      return;
+    }
+
+    if (session.step === "chain") {
+      session.chain = text.toLowerCase();
+      session.step = "amount";
+      await ctx.reply("Enter the amount of nft's you'd like to mint.");
+      return;
+    }
+
+    if (session.step === "amount") {
+      session.quantity = text;
+      session.step = "slug";
+      await ctx.reply("Enter the nft's opensea slug.");
+      return;
+    }
+
+    if (session.step === "slug") {
+      session.slug = text;
+      session.step = "schedule";
+      await ctx.reply(
+        "Enter the time to execute the mint.\nFormat: YYYY-MM-DD HH:mm\n(Example: 2024-12-25 14:30)\nOr type 'now' to run immediately.",
+      );
+      return;
+    }
+
+    if (session.step === "schedule") {
+      const dateTimeStr = text.toLowerCase();
+      const slug = session.slug;
+      const encryptedKeys = session.encryptedKeys;
+
+      if (!encryptedKeys || encryptedKeys.length === 0) {
+        await ctx.reply(
+          "Wallet data missing. Please start the mint process again.",
+        );
+        return;
+      }
+
+      // Check if user wants to run immediately
+      if (dateTimeStr === "now") {
+        try {
+          await ctx.reply("Starting mint immediately...");
+
+          // Decrypt private keys
+          const privateKeys = encryptedKeys.map((encryptedKey) =>
+            decryptPrivateKey(encryptedKey),
+          );
+
+          const overall = await mintWithWallets(
+            privateKeys,
+            slug,
+            session.quantity,
+            session.chain,
+            chatId,
+          );
+          overall.forEach(async (result) => {
+            if (result.success) {
+              await ctx.reply(
+                `• ${result.privateKey.slice(0, 10)}... : OK (${result.hash} @ ${result.block})`,
+              );
+            } else {
+              await ctx.reply(
+                `• ${result.privateKey.slice(0, 10)}... : FAIL (${result.error})`,
+              );
+            }
+          });
+          await ctx.reply("Mint execution completed!");
+        } catch (error) {
+          await ctx.reply(`Mint failed: ${error.message}`);
+        }
+        clearMintSession(chatId);
+        return;
+      }
+
+      // Validate date format YYYY-MM-DD HH:mm
+      const dateTimeRegex = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+      if (!dateTimeRegex.test(dateTimeStr)) {
+        await ctx.reply(
+          "Invalid format. Please use: YYYY-MM-DD HH:mm (or type 'now')\n(Example: 2024-12-25 14:30)",
+        );
+        return;
+      }
+
+      try {
+        const scheduleTime = new Date(dateTimeStr);
+        const firingTime = new Date(dateTimeStr);
+        // Schedule 30 seconds earlier
+        firingTime.setSeconds(scheduleTime.getSeconds() - 30);
+
+        // Validate that the date is in the future
+        if (firingTime <= new Date()) {
+          await ctx.reply(
+            "The scheduled time must be more than 30 seconds in the future.",
+          );
+          return;
+        }
+
+        // Schedule the mint job
+        await agenda.schedule(scheduleTime, "mint", {
+          encryptedKeys,
+          slug,
+          quantity: session.quantity,
+          chain: session.chain,
+          chatId,
+          firingTime,
+        });
+
+        const formattedTime = scheduleTime.toLocaleString();
+        await ctx.reply(
+          `Mint scheduled for ${formattedTime}.\n\n✓ ${encryptedKeys.length} wallet(s)\n✓ Slug: ${slug}\n✓ Chain: ${session.chain}`,
+        );
+
+        clearMintSession(chatId);
+      } catch (error) {
+        await ctx.reply(
+          `Invalid date/time format. Please use: YYYY-MM-DD HH:mm (or type 'now')\n(Example: 2024-12-25 14:30)`,
+        );
+      }
+      return;
+    }
+  }
+});
+
+bot.catch((err) => {
+  console.error("Telegram bot error:", err);
+});
+
+bot.start();
+console.log("Telegram mint bot running");
