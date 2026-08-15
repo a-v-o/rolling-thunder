@@ -4,14 +4,11 @@ import { Menu } from "@grammyjs/menu";
 import { Agenda } from "agenda";
 import { MongoBackend } from "@agendajs/mongo-backend";
 import { encryptPrivateKey, decryptPrivateKey } from "./lib/crypto.js";
-import {
-  startMintSession,
-  getMintSession,
-  clearMintSession,
-} from "./lib/mintSession.js";
+import { startSession, getSession, clearSession } from "./lib/mintSession.js";
 import { START_TEXT, HELP_TEXT, UNSUPPORTED_TEXT } from "./lib/messages.js";
 import { mintWithWallets } from "./mint.js";
 import express from "express";
+import { acceptBestOffer } from "./list.js";
 
 dotenv.config();
 
@@ -78,7 +75,18 @@ mainMenu
   .text("Mint", async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
-    startMintSession(chatId, "wallet");
+    startSession(chatId, "mint");
+    await ctx.reply(
+      "Please send your private key(s), one per line.\nSend /cancel to stop.",
+    );
+  })
+  .row();
+
+mainMenu
+  .text("Sell", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    startSession(chatId, "sell");
     await ctx.reply(
       "Please send your private key(s), one per line.\nSend /cancel to stop.",
     );
@@ -110,11 +118,11 @@ bot.on("message:text", async (ctx) => {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
-  const session = getMintSession(chatId);
+  const session = getSession(chatId);
   if (session) {
     if (text.startsWith("/")) {
       if (text.toLowerCase() === "/cancel") {
-        clearMintSession(chatId);
+        clearSession(chatId);
         await ctx.reply("Mint request canceled.");
       }
       return;
@@ -138,18 +146,38 @@ bot.on("message:text", async (ctx) => {
       // Encrypt private keys
       const encryptedKeys = validKeys.map((key) => encryptPrivateKey(key));
       session.encryptedKeys = encryptedKeys;
-      session.step = "chain";
 
-      await ctx.reply(
-        `Imported ${validKeys.length} wallet(s).\nNow send the target chain for minting (for example: ethereum, polygon, base).`,
-      );
+      if (session.type == "mint") {
+        await ctx.reply(
+          `Imported ${validKeys.length} wallet(s).\nNow send the target chain for minting (for example: ethereum, robinhood, base).`,
+        );
+        session.step = "chain";
+      } else if (sessiom.type == "sell") {
+        await ctx.reply(
+          `Imported ${validKeys.length} wallet(s).\nNow send the target chain for selling (Mainnet, Robinhood, or Base).`,
+        );
+        session.step = "chain";
+      } else {
+        await ctx.reply("Something went wrong. Start the mint process again");
+        clearSession(chatId);
+      }
+
       return;
     }
 
     if (session.step === "chain") {
-      session.chain = text.toLowerCase();
-      session.step = "amount";
-      await ctx.reply("Enter the amount of nft's you'd like to mint.");
+      if (session.type == "mint") {
+        session.chain = text.toLowerCase();
+        session.step = "amount";
+        await ctx.reply("Enter the amount of nft's you'd like to mint.");
+      } else if (session.type == "sell") {
+        session.chain = text.toLowerCase();
+        session.step = "slug";
+        await ctx.reply("Enter the nft's opensea slug.");
+      } else {
+        await ctx.reply("Something went wrong. Start the mint process again");
+        clearSession(chatId);
+      }
       return;
     }
 
@@ -161,11 +189,38 @@ bot.on("message:text", async (ctx) => {
     }
 
     if (session.step === "slug") {
-      session.slug = text;
-      session.step = "schedule";
-      await ctx.reply(
-        "Enter the time to execute the mint.\nFormat: YYYY-MM-DD HH:mm\n(Example: 2024-12-25 14:30)\nOr type 'now' to run immediately.",
-      );
+      if (session.type == "mint") {
+        session.slug = text;
+        session.step = "schedule";
+        await ctx.reply(
+          "Enter the time to execute the mint.\nFormat: YYYY-MM-DD HH:mm\n(Example: 2024-12-25 14:30)\nOr type 'now' to run immediately.",
+        );
+      } else if (session.type == "sell") {
+        session.slug = text;
+        const encryptedKeys = session.encryptedKeys;
+        if (!encryptedKeys || encryptedKeys.length === 0) {
+          await ctx.reply(
+            "Wallet data missing. Please start the mint process again.",
+          );
+          return;
+        }
+
+        const privateKeys = encryptedKeys.map((encryptedKey) =>
+          decryptPrivateKey(encryptedKey),
+        );
+
+        const results = await acceptBestOffer(
+          privateKeys,
+          session.slug,
+          session.chain,
+        );
+        results.forEach(async (result) => {
+          await ctx.reply(
+            `*${result.pk} ${result.txHash ? "sold: " + result.txHash : "couldn't accept offer: " + result.error} `,
+          );
+        });
+      }
+
       return;
     }
 
@@ -213,7 +268,7 @@ bot.on("message:text", async (ctx) => {
         } catch (error) {
           await ctx.reply(`Mint failed: ${error.message}`);
         }
-        clearMintSession(chatId);
+        clearSession(chatId);
         return;
       }
 
@@ -255,7 +310,7 @@ bot.on("message:text", async (ctx) => {
           `Mint scheduled for ${formattedTime}.\n\n✓ ${encryptedKeys.length} wallet(s)\n✓ Slug: ${slug}\n✓ Chain: ${session.chain}`,
         );
 
-        clearMintSession(chatId);
+        clearSession(chatId);
       } catch (error) {
         await ctx.reply(
           `Invalid date/time format. Please use: YYYY-MM-DD HH:mm (or type 'now')\n(Example: 2024-12-25 14:30)`,
