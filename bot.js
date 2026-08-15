@@ -152,7 +152,7 @@ bot.on("message:text", async (ctx) => {
           `Imported ${validKeys.length} wallet(s).\nNow send the target chain for minting (for example: ethereum, robinhood, base).`,
         );
         session.step = "chain";
-      } else if (sessiom.type == "sell") {
+      } else if (session.type == "sell") {
         await ctx.reply(
           `Imported ${validKeys.length} wallet(s).\nNow send the target chain for selling (Mainnet, Robinhood, or Base).`,
         );
