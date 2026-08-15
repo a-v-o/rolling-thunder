@@ -1,7 +1,7 @@
 import { ethers } from "ethers";
 import { OpenSeaSDK, Chain, OrderSide } from "@opensea/sdk";
 
-import { DROP, BASE_URL, WALLETS, SDK_CHAINS } from "./variables.js";
+import { BASE_URL, WALLETS, SDK_CHAINS } from "./variables.js";
 
 const OPENSEA_API_KEY = process.env.API_KEY;
 const RPC_URL = process.env.RPC_URL;
