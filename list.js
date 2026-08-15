@@ -137,7 +137,7 @@ export async function acceptBestOffer(
         if (isLastAttempt) {
           results.push({ pk, reason: error.message });
         } else {
-          const delay = baseDelayMs * 2 ** (attempt - 1) + Math.random() * 250;
+          const delay = baseDelayMs;
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
