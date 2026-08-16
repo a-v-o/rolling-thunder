@@ -215,19 +215,19 @@ bot.on("message:text", async (ctx) => {
           session.chain,
         );
         if (success.length !== 0) {
-          success.forEach(async (wallet) => {
+          for (const wallet of success) {
             await ctx.reply(
               `- ${wallet.pk.slice(0, 12)}... successful. TX hash: ${wallet.txHash}`,
             );
-          });
+          }
         }
 
         if (fail.length !== 0) {
-          fail.forEach(async (wallet) => {
+          for (const wallet of fail) {
             await ctx.reply(
               `- ${wallet.pk.slice(0, 12)}... failed. Reason: ${wallet.error}.`,
             );
-          });
+          }
           await ctx.reply("All failed pks are below so you can retry");
           const failedPks = fail.map((wallet) => wallet.pk);
           await ctx.reply(failedPks.join("\n"));
