@@ -117,12 +117,12 @@ export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
           success.push({ pk, txHash });
         } catch (err) {
           console.error(err.message);
-          fail.push({ pk, err: err.message });
+          fail.push({ pk, err: err.shortMessage });
         }
       }
     } catch (err) {
       console.error(err);
-      fail.push({ pk, err: err.message });
+      fail.push({ pk, err: err.shortMessage });
     }
   }
   return { success, fail };
