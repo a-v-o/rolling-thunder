@@ -225,7 +225,7 @@ bot.on("message:text", async (ctx) => {
         if (fail.length !== 0) {
           for (const wallet of fail) {
             await ctx.reply(
-              `- ${wallet.pk.slice(0, 12)}... failed. Reason: ${wallet.error}.`,
+              `- ${wallet.pk.slice(0, 12)}... failed. Reason: ${wallet.err}.`,
             );
           }
           await ctx.reply("All failed pks are below so you can retry");
