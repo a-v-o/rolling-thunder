@@ -161,7 +161,6 @@ bot.on("message:text", async (ctx) => {
         await ctx.reply("Something went wrong. Start the mint process again");
         clearSession(chatId);
       }
-
       return;
     }
 
