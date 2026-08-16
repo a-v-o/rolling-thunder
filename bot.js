@@ -229,7 +229,8 @@ bot.on("message:text", async (ctx) => {
             );
           });
           await ctx.reply("All failed pks are below so you can retry");
-          await ctx.reply(fail.join("\n"));
+          const failedPks = fail.map((wallet) => wallet.pk);
+          await ctx.reply(failedPks.join("\n"));
         }
       }
 

@@ -116,9 +116,7 @@ export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
           });
           success.push({ pk, txHash });
         } catch (err) {
-          console.error(err);
-
-          fail.push({ pk, err });
+          fail.push({ pk, err: err.shortMessage });
         }
       }
     } catch (err) {
