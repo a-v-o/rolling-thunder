@@ -214,19 +214,23 @@ bot.on("message:text", async (ctx) => {
           session.slug,
           session.chain,
         );
-        success.forEach(async (wallet) => {
-          await ctx.reply(
-            `- ${wallet.pk.slice(0, 12)}... successful. TX hash: ${wallet.txHash}`,
-          );
-        });
+        if (success.length !== 0) {
+          success.forEach(async (wallet) => {
+            await ctx.reply(
+              `- ${wallet.pk.slice(0, 12)}... successful. TX hash: ${wallet.txHash}`,
+            );
+          });
+        }
 
-        fail.forEach(async (wallet) => {
-          await ctx.reply(
-            `- ${wallet.pk.slice(0, 12)}... failed. Reason: ${wallet.error}. All failed pks are below so you can retry.`,
-          );
-        });
-
-        await ctx.reply(fail.join("\n"));
+        if (fail.length !== 0) {
+          fail.forEach(async (wallet) => {
+            await ctx.reply(
+              `- ${wallet.pk.slice(0, 12)}... failed. Reason: ${wallet.error}.`,
+            );
+          });
+          await ctx.reply("All failed pks are below so you can retry");
+          await ctx.reply(fail.join("\n"));
+        }
       }
 
       return;

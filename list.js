@@ -107,15 +107,19 @@ export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
           openseaSDK,
           collectionSlug,
         );
-        const txHash = await openseaSDK.fulfillOrder({
-          order: bestOffer,
-          accountAddress: wallet.address,
-          tokenId: token.tokenId,
-          assetContractAddress: token.contract,
-        });
+        try {
+          const txHash = await openseaSDK.fulfillOrder({
+            order: bestOffer,
+            accountAddress: wallet.address,
+            tokenId: token.tokenId,
+            assetContractAddress: token.contract,
+          });
+          success.push({ pk, txHash });
+        } catch (err) {
+          console.error(err);
 
-        console.log({ txHash });
-        success.push({ pk, txHash });
+          fail.push({ pk, err });
+        }
       }
     } catch (err) {
       console.error(err);
