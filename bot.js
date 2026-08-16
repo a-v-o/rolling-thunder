@@ -209,16 +209,24 @@ bot.on("message:text", async (ctx) => {
           decryptPrivateKey(encryptedKey),
         );
 
-        const results = await acceptBestOffer(
+        const { success, fail } = await acceptBestOffer(
           privateKeys,
           session.slug,
           session.chain,
         );
-        results.forEach(async (result) => {
+        success.forEach(async (wallet) => {
           await ctx.reply(
-            `*${result.pk} ${result.txHash ? "sold: " + result.txHash : "couldn't accept offer: " + result.error} `,
+            `- ${wallet.pk.slice(0, 12)}... successful. TX hash: ${wallet.txHash}`,
           );
         });
+
+        fail.forEach(async (wallet) => {
+          await ctx.reply(
+            `- ${wallet.pk.slice(0, 12)}... failed. Reason: ${wallet.error}. All failed pks are below so you can retry.`,
+          );
+        });
+
+        await ctx.reply(fail.join("\n"));
       }
 
       return;

@@ -1,20 +1,9 @@
 import { ethers } from "ethers";
 import { OpenSeaSDK, Chain, OrderSide } from "@opensea/sdk";
 
-import { BASE_URL, SDK_CHAINS } from "./variables.js";
+import { BASE_URL, RPC, SDK_CHAINS } from "./variables.js";
 
 const OPENSEA_API_KEY = process.env.API_KEY;
-const RPC_URL = process.env.RPC_URL;
-
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-
-const openseaSDK = new OpenSeaSDK(provider, {
-  //   chain: Chain.Mainnet,
-  //   chain: Chain.Base,
-  //   chain: Chain.Robinhood,
-  chain: Chain.Robinhood,
-  apiKey: OPENSEA_API_KEY,
-});
 
 async function openseaGet(path) {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -25,13 +14,29 @@ async function openseaGet(path) {
   return res.json();
 }
 
-async function getWalletTokensInCollection(walletAddress, collectionSlug) {
+function isCollectionWideOffer(offer) {
+  return !offer.criteria?.trait;
+}
+
+function sortOffersByPrice(offers) {
+  return [...offers].sort((a, b) => {
+    const priceA = BigInt(a.price?.value ?? 0);
+    const priceB = BigInt(b.price?.value ?? 0);
+    return priceB > priceA ? 1 : priceB < priceA ? -1 : 0;
+  });
+}
+
+async function getWalletTokensInCollection(
+  walletAddress,
+  collectionSlug,
+  chain,
+) {
   const tokenIds = [];
   let cursor = null;
 
   do {
     const url = new URL(
-      `${BASE_URL}/chain/${DROP.chain}/account/${walletAddress}/nfts`,
+      `${BASE_URL}/chain/${chain}/account/${walletAddress}/nfts`,
     );
     url.searchParams.set("collection", collectionSlug);
     url.searchParams.set("limit", "200");
@@ -55,7 +60,7 @@ async function getWalletTokensInCollection(walletAddress, collectionSlug) {
   return tokenIds;
 }
 
-async function getBestOfferForToken(collectionSlug) {
+async function getBestOfferForToken(openseaSDK, collectionSlug) {
   const allOffers = [];
   let cursor = undefined;
 
@@ -77,72 +82,49 @@ async function getBestOfferForToken(collectionSlug) {
   return best;
 }
 
-export async function acceptBestOffer(
-  privateKeys,
-  collectionSlug,
-  chain,
-  maxAttempts = 3,
-  baseDelayMs = 1000,
-) {
-  const results = [];
+export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
+  const rpcURL = RPC[chain];
+  const provider = new ethers.JsonRpcProvider(rpcURL);
+
+  const success = [];
+  const fail = [];
 
   for (const pk of privateKeys) {
-    let walletSucceeded = false;
-
-    for (
-      let attempt = 1;
-      attempt <= maxAttempts && !walletSucceeded;
-      attempt++
-    ) {
-      try {
-        const wallet = new ethers.Wallet(pk, provider);
-        const tokensForCollection = await getWalletTokensInCollection(
-          wallet.address,
+    try {
+      const wallet = new ethers.Wallet(pk, provider);
+      const tokensForCollection = await getWalletTokensInCollection(
+        wallet.address,
+        collectionSlug,
+        chain,
+      );
+      const sdkChain = SDK_CHAINS[chain];
+      const openseaSDK = new OpenSeaSDK(wallet, {
+        chain: sdkChain,
+        apiKey: OPENSEA_API_KEY,
+      });
+      for (const token of tokensForCollection) {
+        const bestOffer = await getBestOfferForToken(
+          openseaSDK,
           collectionSlug,
         );
-
-        const sdkChain = SDK_CHAINS[chain];
-
-        const openseaSDK = new OpenSeaSDK(wallet, {
-          chain: sdkChain,
-          apiKey: OPENSEA_API_KEY,
+        const txHash = await openseaSDK.fulfillOrder({
+          order: bestOffer,
+          accountAddress: wallet.address,
+          tokenId: token.tokenId,
+          assetContractAddress: token.contract,
         });
 
-        for (const token of tokensForCollection) {
-          const bestOffer = await getBestOfferForToken(collectionSlug);
-
-          if (!bestOffer) {
-            results.push({
-              pk,
-              tokenId: token.tokenId,
-              reason: "no offer available",
-            });
-            continue;
-          }
-
-          const txHash = await openseaSDK.fulfillOrder({
-            order: bestOffer,
-            accountAddress: wallet.address,
-            tokenId: token.tokenId,
-            assetContractAddress: token.contract,
-          });
-
-          results.push({ pk, tokenId: token.tokenId, txHash });
-        }
-
-        walletSucceeded = true;
-      } catch (error) {
-        const isLastAttempt = attempt === maxAttempts;
-
-        if (isLastAttempt) {
-          results.push({ pk, reason: error.message });
-        } else {
-          const delay = baseDelayMs;
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
+        success.push({ pk, txHash });
       }
+    } catch (err) {
+      fail.push({ pk, err });
     }
   }
-
-  return results;
+  return { success, fail };
 }
+
+// await acceptBestOffer(
+//   ["2b3fa300ee1cf9354c3531c2d3c7c79d289ae3e9fea9a8cd92aeec563ba0420d"],
+//   "miu-hoodies",
+//   "robinhood",
+// );
