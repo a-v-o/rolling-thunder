@@ -125,8 +125,8 @@ export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
   return { success, fail };
 }
 
-await acceptBestOffer(
-  ["2b3fa300ee1cf9354c3531c2d3c7c79d289ae3e9fea9a8cd92aeec563ba0420d"],
-  "miu-hoodies",
-  "robinhood",
-);
+// await acceptBestOffer(
+//   ["2b3fa300ee1cf9354c3531c2d3c7c79d289ae3e9fea9a8cd92aeec563ba0420d"],
+//   "miu-hoodies",
+//   "robinhood",
+// );
