@@ -1,5 +1,5 @@
 import { ethers } from "ethers";
-import { OpenSeaSDK, Chain, OrderSide } from "@opensea/sdk";
+import { OpenSeaSDK, Chain, OrderSide, TokenStandard } from "@opensea/sdk";
 
 import { BASE_URL, RPC, SDK_CHAINS } from "./variables.js";
 
