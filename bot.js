@@ -265,7 +265,8 @@ bot.on("message:text", async (ctx) => {
             session.chain,
             chatId,
           );
-          overall.forEach(async (result) => {
+
+          for (const result of overall) {
             if (result.success) {
               await ctx.reply(
                 `• ${result.privateKey.slice(0, 10)}... : OK (${result.hash} @ ${result.block})`,
@@ -275,7 +276,7 @@ bot.on("message:text", async (ctx) => {
                 `• ${result.privateKey.slice(0, 10)}... : FAIL (${result.error})`,
               );
             }
-          });
+          }
           await ctx.reply("Mint execution completed!");
         } catch (error) {
           await ctx.reply(`Mint failed: ${error.message}`);

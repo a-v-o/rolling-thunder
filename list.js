@@ -102,11 +102,27 @@ export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
         chain: sdkChain,
         apiKey: OPENSEA_API_KEY,
       });
+
+      const assets = tokensForCollection.map((token) => ({
+        asset: {
+          tokenAddress: token.contract,
+          tokenId: token.tokenId,
+          tokenStandard: TokenStandard.ERC721,
+        },
+      }));
+
+      const approvalHash = await walletSDK.batchApproveAssets({
+        assets: assets,
+        fromAddress: wallet.address,
+      });
+
       for (const token of tokensForCollection) {
         const bestOffer = await getBestOfferForToken(
           openseaSDK,
           collectionSlug,
         );
+        try {
+        } catch (err) {}
         const txHash = await openseaSDK.fulfillOrder({
           order: bestOffer,
           accountAddress: wallet.address,
