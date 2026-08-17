@@ -194,7 +194,7 @@ export async function transferNFTs(
 
 async function getFloorPrice(walletSDK, collectionSlug) {
   const stats = await walletSDK.api.getCollectionStats(collectionSlug);
-  const floorPrice = stats?.total?.floor_price;
+  const floorPrice = stats?.total?.floorPrice;
 
   if (floorPrice === undefined || floorPrice === null) {
     throw new Error(
