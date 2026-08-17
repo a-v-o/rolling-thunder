@@ -192,8 +192,8 @@ export async function transferNFTs(
   return { success, fail };
 }
 
-async function getFloorPrice(walletSDK, collectionSlug) {
-  const stats = await walletSDK.api.getCollectionStats(collectionSlug);
+async function getFloorPrice(openseaSDK, collectionSlug) {
+  const stats = await openseaSDK.api.getCollectionStats(collectionSlug);
   const floorPrice = stats?.total?.floorPrice;
 
   if (floorPrice === undefined || floorPrice === null) {
@@ -250,7 +250,7 @@ export async function listNfts(privateKeys, collectionSlug, price, chain) {
       }
 
       for (const token of tokensForCollection) {
-        const listing = await walletSDK.createListing({
+        const listing = await openseaSDK.createListing({
           asset: {
             tokenId: token.tokenId,
             tokenAddress: token.contract,
