@@ -267,14 +267,5 @@ export async function listNfts(privateKeys, collectionSlug, price, chain) {
       fail.push({ pk, err: error });
     }
   }
-
-  const expirationTime = Math.round(Date.now() / 1000) + expirationSeconds;
-
-  console.log(
-    `Listed token ${tokenId} at ${amountEth.toFixed(6)} ETH` +
-      (priceMode === "usd" ? ` (~$${usdAmount})` : " (floor price)"),
-  );
-
-  return listing;
   return { success, fail };
 }
