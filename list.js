@@ -1,18 +1,9 @@
 import { ethers } from "ethers";
-import { OpenSeaSDK, Chain, OrderSide, TokenStandard } from "@opensea/sdk";
+import { OpenSeaSDK, Chain, OrderSide } from "@opensea/sdk";
 
 import { BASE_URL, RPC, SDK_CHAINS } from "./variables.js";
 
 const OPENSEA_API_KEY = process.env.API_KEY;
-
-async function openseaGet(path) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "x-api-key": OPENSEA_API_KEY, accept: "application/json" },
-  });
-  if (!res.ok)
-    throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
-  return res.json();
-}
 
 function isCollectionWideOffer(offer) {
   return !offer.criteria?.trait;
@@ -121,8 +112,7 @@ export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
           openseaSDK,
           collectionSlug,
         );
-        try {
-        } catch (err) {}
+
         const txHash = await openseaSDK.fulfillOrder({
           order: bestOffer,
           accountAddress: wallet.address,
@@ -133,8 +123,158 @@ export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
       }
     } catch (err) {
       console.error(err);
-      fail.push({ pk, err: err.shortMessage });
+      const error = err.shortMessage ? err.shortMessage : err.message;
+      fail.push({ pk, err: error });
     }
   }
+  return { success, fail };
+}
+
+export async function transferNFTs(
+  privateKeys,
+  collectionSlug,
+  chain,
+  recipientAddress,
+) {
+  const rpcURL = RPC[chain];
+  const provider = new ethers.JsonRpcProvider(rpcURL);
+
+  const success = [];
+  const fail = [];
+
+  for (const pk of privateKeys) {
+    try {
+      const wallet = new ethers.Wallet(pk, provider);
+      const tokensForCollection = await getWalletTokensInCollection(
+        wallet.address,
+        collectionSlug,
+        chain,
+      );
+      const sdkChain = SDK_CHAINS[chain];
+      const openseaSDK = new OpenSeaSDK(wallet, {
+        chain: sdkChain,
+        apiKey: OPENSEA_API_KEY,
+      });
+
+      const assetsToApprove = tokensForCollection.map((token) => ({
+        asset: {
+          tokenAddress: token.contract,
+          tokenId: token.tokenId,
+          tokenStandard: TokenStandard.ERC721,
+        },
+      }));
+
+      const assetsToTransfer = tokensForCollection.map((token) => ({
+        asset: {
+          tokenAddress: token.contract,
+          tokenId: token.tokenId,
+          tokenStandard: TokenStandard.ERC721,
+          toAddress: recipientAddress,
+        },
+      }));
+
+      const approvalHash = await openseaSDK.batchApproveAssets({
+        assets: assetsToApprove,
+        fromAddress: wallet.address,
+      });
+
+      const txHash = await openseaSDK.bulkTransfer({
+        assets: assetsToTransfer,
+        fromAddress: wallet.address,
+      });
+      success.push({ pk, txHash });
+    } catch (err) {
+      console.error(err);
+      const error = err.shortMessage ? err.shortMessage : err.message;
+      fail.push({ pk, err: error });
+    }
+  }
+  return { success, fail };
+}
+
+async function getFloorPrice(walletSDK, collectionSlug) {
+  const stats = await walletSDK.api.getCollectionStats(collectionSlug);
+  const floorPrice = stats?.total?.floor_price;
+
+  if (floorPrice === undefined || floorPrice === null) {
+    throw new Error(
+      `Could not read floor_price from stats for ${collectionSlug}`,
+    );
+  }
+
+  return floorPrice;
+}
+
+async function getEthUsdRate() {
+  const res = await fetch(
+    "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd",
+  );
+  if (!res.ok) throw new Error(`Failed to fetch ETH/USD rate: ${res.status}`);
+  const data = await res.json();
+  const rate = data?.ethereum?.usd;
+  if (!rate) throw new Error("ETH/USD rate not found in response");
+  return rate;
+}
+
+export async function listNfts(privateKeys, collectionSlug, price, chain) {
+  const rpcURL = RPC[chain];
+  const provider = new ethers.JsonRpcProvider(rpcURL);
+
+  const success = [];
+  const fail = [];
+
+  for (const pk of privateKeys) {
+    try {
+      const wallet = new ethers.Wallet(pk, provider);
+      const tokensForCollection = await getWalletTokensInCollection(
+        wallet.address,
+        collectionSlug,
+        chain,
+      );
+      const sdkChain = SDK_CHAINS[chain];
+      const openseaSDK = new OpenSeaSDK(wallet, {
+        chain: sdkChain,
+        apiKey: OPENSEA_API_KEY,
+      });
+
+      let amountEth;
+
+      if (price === "floor") {
+        amountEth = await getFloorPrice(openseaSDK, collectionSlug);
+      } else {
+        if (!price || price <= 0) {
+          throw new Error("Price must be provided and must be positive");
+        }
+        const ethUsdRate = await getEthUsdRate();
+        amountEth = usdAmount / ethUsdRate;
+      }
+
+      for (const token of tokensForCollection) {
+        const listing = await walletSDK.createListing({
+          asset: {
+            tokenId: token.tokenId,
+            tokenAddress: token.contract,
+          },
+          accountAddress: wallet.address,
+          amount: amountEth,
+        });
+
+        success.push({ pk, txHash: listing.orderHash });
+      }
+    } catch (err) {
+      console.error(err);
+      const error = err.shortMessage ? err.shortMessage : err.message;
+      fail.push({ pk, err: error });
+    }
+  }
+
+  const expirationTime = Math.round(Date.now() / 1000) + expirationSeconds;
+
+  console.log(
+    `Listed token ${tokenId} at ${amountEth.toFixed(6)} ETH` +
+      (priceMode === "usd" ? ` (~$${usdAmount})` : " (floor price)"),
+  );
+
+  return listing;
   return { success, fail };
 }

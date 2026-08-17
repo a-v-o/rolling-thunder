@@ -8,7 +8,7 @@ import { startSession, getSession, clearSession } from "./lib/mintSession.js";
 import { START_TEXT, HELP_TEXT, UNSUPPORTED_TEXT } from "./lib/messages.js";
 import { mintWithWallets } from "./mint.js";
 import express from "express";
-import { acceptBestOffer } from "./list.js";
+import { acceptBestOffer, listNfts, transferNFTs } from "./list.js";
 
 dotenv.config();
 
@@ -93,11 +93,27 @@ mainMenu
   })
   .row();
 
-// mainMenu
-//   .text("List", async (ctx) => {
+mainMenu
+  .text("Transfer", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    startSession(chatId, "transfer");
+    await ctx.reply(
+      "Please send your private key(s), one per line.\nSend /cancel to stop.",
+    );
+  })
+  .row();
 
-//   })
-//   .row();
+mainMenu
+  .text("List", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    startSession(chatId, "list");
+    await ctx.reply(
+      "Please send your private key(s), one per line.\nSend /cancel to stop.",
+    );
+  })
+  .row();
 
 mainMenu
   .text("Help", async (ctx) => {
@@ -157,6 +173,16 @@ bot.on("message:text", async (ctx) => {
           `Imported ${validKeys.length} wallet(s).\nNow send the target chain for selling (Mainnet, Robinhood, or Base).`,
         );
         session.step = "chain";
+      } else if (session.type == "transfer") {
+        await ctx.reply(
+          `Imported ${validKeys.length} wallet(s).\nNow send the target chain for transferring the nfts (Mainnet, Robinhood, or Base).`,
+        );
+        session.step = "chain";
+      } else if (session.type == "list") {
+        await ctx.reply(
+          `Imported ${validKeys.length} wallet(s).\nNow send the target chain for listing the nfts (Mainnet, Robinhood, or Base).`,
+        );
+        session.step = "chain";
       } else {
         await ctx.reply("Something went wrong. Start the mint process again");
         clearSession(chatId);
@@ -169,7 +195,11 @@ bot.on("message:text", async (ctx) => {
         session.chain = text.toLowerCase();
         session.step = "amount";
         await ctx.reply("Enter the amount of nft's you'd like to mint.");
-      } else if (session.type == "sell") {
+      } else if (
+        session.type == "sell" ||
+        session.type == "transfer" ||
+        session.type == "list"
+      ) {
         session.chain = text.toLowerCase();
         session.step = "slug";
         await ctx.reply("Enter the nft's opensea slug.");
@@ -231,9 +261,62 @@ bot.on("message:text", async (ctx) => {
           const failedPks = fail.map((wallet) => wallet.pk);
           await ctx.reply(failedPks.join("\n"));
         }
+      } else if (session.type == "list") {
+        session.slug = text;
+        session.step = "price";
+        await ctx.reply(
+          "How much would you like to list for (usd) or enter 'floor' to list at floor price",
+        );
+      } else if (session.type == "transfer") {
+        session.slug = text;
+        session.step = "recipient";
+        await ctx.reply("Enter the wallet address to send the nfts to");
+      } else {
+        await ctx.reply("Something went wrong. Try again");
+        clearSession(chatId);
       }
 
       return;
+    }
+
+    if (session.step == "price") {
+      session.price = text;
+      const encryptedKeys = session.encryptedKeys;
+      if (!encryptedKeys || encryptedKeys.length === 0) {
+        await ctx.reply(
+          "Wallet data missing. Please start the mint process again.",
+        );
+        return;
+      }
+
+      const privateKeys = encryptedKeys.map((encryptedKey) =>
+        decryptPrivateKey(encryptedKey),
+      );
+
+      const { success, fail } = await listNfts(
+        privateKeys,
+        session.slug,
+        session.price,
+        session.chain,
+      );
+      if (success.length !== 0) {
+        for (const wallet of success) {
+          await ctx.reply(
+            `- ${wallet.pk.slice(0, 12)}... successful. TX hash: ${wallet.txHash}`,
+          );
+        }
+      }
+
+      if (fail.length !== 0) {
+        for (const wallet of fail) {
+          await ctx.reply(
+            `- ${wallet.pk.slice(0, 12)}... failed. Reason: ${wallet.err}.`,
+          );
+        }
+        await ctx.reply("All failed pks are below so you can retry");
+        const failedPks = fail.map((wallet) => wallet.pk);
+        await ctx.reply(failedPks.join("\n"));
+      }
     }
 
     if (session.step === "schedule") {
@@ -330,6 +413,46 @@ bot.on("message:text", async (ctx) => {
         );
       }
       return;
+    }
+
+    if (session.step == "recipient") {
+      session.recipientAddress = text;
+      const encryptedKeys = session.encryptedKeys;
+      if (!encryptedKeys || encryptedKeys.length === 0) {
+        await ctx.reply(
+          "Wallet data missing. Please start the mint process again.",
+        );
+        return;
+      }
+
+      const privateKeys = encryptedKeys.map((encryptedKey) =>
+        decryptPrivateKey(encryptedKey),
+      );
+
+      const { success, fail } = await transferNFTs(
+        privateKeys,
+        session.slug,
+        session.chain,
+        session.recipientAddress,
+      );
+      if (success.length !== 0) {
+        for (const wallet of success) {
+          await ctx.reply(
+            `- ${wallet.pk.slice(0, 12)}... successful. TX hash: ${wallet.txHash}`,
+          );
+        }
+      }
+
+      if (fail.length !== 0) {
+        for (const wallet of fail) {
+          await ctx.reply(
+            `- ${wallet.pk.slice(0, 12)}... failed. Reason: ${wallet.err}.`,
+          );
+        }
+        await ctx.reply("All failed pks are below so you can retry");
+        const failedPks = fail.map((wallet) => wallet.pk);
+        await ctx.reply(failedPks.join("\n"));
+      }
     }
   }
 });
