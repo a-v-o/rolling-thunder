@@ -1,5 +1,5 @@
 import { ethers } from "ethers";
-import { OpenSeaSDK, Chain, OrderSide } from "@opensea/sdk";
+import { OpenSeaSDK, TokenStandard } from "@opensea/sdk";
 
 import { BASE_URL, RPC, SDK_CHAINS } from "./variables.js";
 
@@ -102,7 +102,7 @@ export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
         },
       }));
 
-      const approvalHash = await openseaSDK.batchApproveAssets({
+      await openseaSDK.batchApproveAssets({
         assets: assets,
         fromAddress: wallet.address,
       });
@@ -173,7 +173,7 @@ export async function transferNFTs(
         },
       }));
 
-      const approvalHash = await openseaSDK.batchApproveAssets({
+      await openseaSDK.batchApproveAssets({
         assets: assetsToApprove,
         fromAddress: wallet.address,
       });
@@ -246,7 +246,7 @@ export async function listNfts(privateKeys, collectionSlug, price, chain) {
           throw new Error("Price must be provided and must be positive");
         }
         const ethUsdRate = await getEthUsdRate();
-        amountEth = usdAmount / ethUsdRate;
+        amountEth = price / ethUsdRate;
       }
 
       for (const token of tokensForCollection) {

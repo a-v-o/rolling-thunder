@@ -59,7 +59,9 @@ export async function getMintPayload(
       await sleep(1000);
       return getMintPayload(walletAddress, quantity, slug, retries - 1);
     } else {
-      throw new Error(`Failed to fetch mint payload: ${error.message}`);
+      throw new Error(`Failed to fetch mint payload: ${error.message}`, {
+        cause: error,
+      });
     }
   }
 }
@@ -117,14 +119,14 @@ export async function waitForMint(mintTimeISO, chatId, slug) {
     if (remaining <= 0) break;
 
     if (remaining > 30000) {
-      const data = await getCollectionDetails(slug);
+      await getCollectionDetails(slug);
       await bot.api.sendMessage(
         chatId,
         `${Math.round(remaining / 1000)}s remaining...`,
       );
       await sleep(Math.min(remaining - 30000, 30000));
     } else if (remaining > 2000) {
-      const data = await getCollectionDetails(slug);
+      await getCollectionDetails(slug);
       await bot.api.sendMessage(
         chatId,
         `${Math.round(remaining / 1000)}s remaining...`,

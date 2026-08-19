@@ -5,7 +5,7 @@ import { Agenda } from "agenda";
 import { MongoBackend } from "@agendajs/mongo-backend";
 import { encryptPrivateKey, decryptPrivateKey } from "./lib/crypto.js";
 import { startSession, getSession, clearSession } from "./lib/mintSession.js";
-import { START_TEXT, HELP_TEXT, UNSUPPORTED_TEXT } from "./lib/messages.js";
+import { START_TEXT, HELP_TEXT } from "./lib/messages.js";
 import { mintWithWallets } from "./mint.js";
 import express from "express";
 import { acceptBestOffer, listNfts, transferNFTs } from "./list.js";
@@ -380,10 +380,9 @@ bot.on("message:text", async (ctx) => {
       try {
         const scheduleTime = new Date(dateTimeStr);
         const firingTime = new Date(dateTimeStr);
-        // Schedule 30 seconds earlier
+
         firingTime.setSeconds(scheduleTime.getSeconds() - 30);
 
-        // Validate that the date is in the future
         if (firingTime <= new Date()) {
           await ctx.reply(
             "The scheduled time must be more than 30 seconds in the future.",
@@ -391,7 +390,6 @@ bot.on("message:text", async (ctx) => {
           return;
         }
 
-        // Schedule the mint job
         await agenda.schedule(firingTime, "mint", {
           encryptedKeys,
           slug,
@@ -408,9 +406,7 @@ bot.on("message:text", async (ctx) => {
 
         clearSession(chatId);
       } catch (error) {
-        await ctx.reply(
-          `Invalid date/time format. Please use: YYYY-MM-DD HH:mm (or type 'now')\n(Example: 2024-12-25 14:30)`,
-        );
+        await ctx.reply(`Something went wrong: ${error}`);
       }
       return;
     }
