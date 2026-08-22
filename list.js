@@ -174,7 +174,7 @@ export async function transferNFTs(
       }));
 
       const approvalHash = await openseaSDK.batchApproveAssets({
-        assets: assetsToApprove,
+        assets: assetsToTransfer,
         fromAddress: wallet.address,
       });
 
