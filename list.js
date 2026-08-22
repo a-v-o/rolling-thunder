@@ -169,8 +169,8 @@ export async function transferNFTs(
           tokenAddress: token.contract,
           tokenId: token.tokenId,
           tokenStandard: TokenStandard.ERC721,
-          toAddress: recipientAddress,
         },
+        toAddress: recipientAddress,
       }));
 
       await openseaSDK.batchApproveAssets({
