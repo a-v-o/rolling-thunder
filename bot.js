@@ -9,7 +9,11 @@ import { START_TEXT, HELP_TEXT } from "./lib/messages.js";
 import { mintWithWallets, getDropStages, isStageLive } from "./mint.js";
 import express from "express";
 import { acceptBestOffer, listNfts, transferNFTs } from "./list.js";
-import { getDecryptedKeys, reportResults, splitMintResults } from "./utils.js";
+import {
+  getDecryptedKeys,
+  reportResults,
+  splitMintResults,
+} from ".lib/utils.js";
 
 dotenv.config();
 
