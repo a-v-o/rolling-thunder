@@ -6,7 +6,7 @@ import { MongoBackend } from "@agendajs/mongo-backend";
 import { encryptPrivateKey } from "./lib/crypto.js";
 import { startSession, getSession, clearSession } from "./lib/mintSession.js";
 import { START_TEXT, HELP_TEXT } from "./lib/messages.js";
-import { mintWithWallets } from "./mint.js";
+import { mintWithWallets, getDropStages, isStageLive } from "./mint.js";
 import express from "express";
 import { acceptBestOffer, listNfts, transferNFTs } from "./list.js";
 import { getDecryptedKeys, reportResults, splitMintResults } from "./utils.js";
@@ -33,7 +33,7 @@ const agenda = new Agenda({
 });
 
 agenda.define("mint", async (job) => {
-  const { encryptedKeys, slug, quantity, chain, chatId, scheduleTime } =
+  const { encryptedKeys, slug, quantity, chain, chatId, scheduleTime, stage } =
     job.attrs.data;
   const sendMessage = (text) => bot.api.sendMessage(chatId, text);
 
@@ -47,6 +47,7 @@ agenda.define("mint", async (job) => {
       chain,
       chatId,
       scheduleTime,
+      stage,
     );
     await reportResults(sendMessage, splitMintResults(overall), "Mint");
     await sendMessage("Mint execution completed!");
@@ -113,6 +114,44 @@ bot.command("start", async (ctx) => {
   await ctx.reply(START_TEXT, { reply_markup: mainMenu });
 });
 
+/**
+ * Schedules a mint for a stage's own startTime — used when the selected
+ * stage isn't live yet. Replaces manual date/time entry: the stage's start
+ * time is the source of truth.
+ */
+async function scheduleMintForStage(ctx, chatId, session) {
+  const { slug, chain, quantity, encryptedKeys, stage } = session;
+
+  const scheduleTime = new Date(stage.start_time);
+  const firingTime = new Date(scheduleTime);
+  firingTime.setSeconds(scheduleTime.getSeconds() - 30);
+
+  if (firingTime <= new Date()) {
+    await ctx.reply(
+      `Stage "${stage.label}" starts in less than 30 seconds — too soon to schedule reliably. Start again once it's live to fire immediately, or pick it up again with more lead time.`,
+    );
+    clearSession(chatId);
+    return;
+  }
+
+  await agenda.schedule(firingTime, "mint", {
+    encryptedKeys,
+    slug,
+    quantity,
+    chain,
+    chatId,
+    scheduleTime,
+    stage,
+  });
+
+  const formattedTime = scheduleTime.toLocaleString();
+  await ctx.reply(
+    `Mint scheduled for stage "${stage.label}" start at ${formattedTime}.\n\n✓ ${encryptedKeys.length} wallet(s)\n✓ Slug: ${slug}\n✓ Chain: ${chain}`,
+  );
+
+  clearSession(chatId);
+}
+
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text?.trim();
   if (!text) return;
@@ -133,7 +172,7 @@ bot.on("message:text", async (ctx) => {
 
   const config = FLOW_CONFIG[session.type];
   if (!config) {
-    await ctx.reply("Something went wrong. Start the process again");
+    await ctx.reply("Something went wrong. Start the mint process again");
     clearSession(chatId);
     return;
   }
@@ -184,10 +223,38 @@ bot.on("message:text", async (ctx) => {
     session.slug = text;
 
     if (session.type === "mint") {
-      session.step = "schedule";
-      await ctx.reply(
-        "Enter the time to execute the mint.\nFormat: YYYY-MM-DD HH:mm\n(Example: 2024-12-25 14:30)\nOr type 'now' to run immediately.",
-      );
+      let stages;
+      try {
+        stages = await getDropStages(session.slug);
+      } catch (error) {
+        await ctx.reply(`Could not fetch drop stages: ${error.message}`);
+        clearSession(chatId);
+        return;
+      }
+
+      if (!stages || stages.length === 0) {
+        await ctx.reply(
+          "No mint stages found for this slug. Start again with a different slug.",
+        );
+        clearSession(chatId);
+        return;
+      }
+
+      session.stages = stages;
+      session.step = "stage";
+
+      const stageList = stages
+        .map((stage, i) => {
+          const status = isStageLive(stage) ? "🟢 LIVE" : "⚪ not live";
+          return (
+            `${i + 1}. ${stage.label} (${status})\n` +
+            `   Price: ${stage.price}  Max/wallet: ${stage.max_per_wallet}\n` +
+            `   Start: ${stage.start_time}\n   End: ${stage.end_time}`
+          );
+        })
+        .join("\n\n");
+
+      await ctx.reply(`Select a mint stage by number:\n\n${stageList}`);
       return;
     }
 
@@ -208,7 +275,9 @@ bot.on("message:text", async (ctx) => {
     // session.type === "sell"
     const encryptedKeys = session.encryptedKeys;
     if (!encryptedKeys || encryptedKeys.length === 0) {
-      await ctx.reply("Wallet data missing. Please start the process again.");
+      await ctx.reply(
+        "Wallet data missing. Please start the mint process again.",
+      );
       return;
     }
 
@@ -227,7 +296,9 @@ bot.on("message:text", async (ctx) => {
     session.price = text;
     const encryptedKeys = session.encryptedKeys;
     if (!encryptedKeys || encryptedKeys.length === 0) {
-      await ctx.reply("Wallet data missing. Please start the process again.");
+      await ctx.reply(
+        "Wallet data missing. Please start the mint process again.",
+      );
       return;
     }
 
@@ -247,7 +318,9 @@ bot.on("message:text", async (ctx) => {
     session.recipientAddress = text;
     const encryptedKeys = session.encryptedKeys;
     if (!encryptedKeys || encryptedKeys.length === 0) {
-      await ctx.reply("Wallet data missing. Please start the process again.");
+      await ctx.reply(
+        "Wallet data missing. Please start the mint process again.",
+      );
       return;
     }
 
@@ -263,78 +336,83 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
-  if (session.step === "schedule") {
-    const dateTimeStr = text.toLowerCase();
-    const slug = session.slug;
-    const encryptedKeys = session.encryptedKeys;
+  if (session.step === "stage") {
+    const stages = session.stages || [];
+    const choice = Number(text);
 
-    if (!encryptedKeys || encryptedKeys.length === 0) {
-      await ctx.reply("Wallet data missing. Please start the process again.");
+    if (!Number.isInteger(choice) || choice < 1 || choice > stages.length) {
+      await ctx.reply(`Please enter a number between 1 and ${stages.length}.`);
       return;
     }
 
-    if (dateTimeStr === "now") {
-      try {
-        await ctx.reply("Starting mint immediately...");
-        const privateKeys = getDecryptedKeys(encryptedKeys);
-        const overall = await mintWithWallets(
-          privateKeys,
-          slug,
-          session.quantity,
-          session.chain,
-          chatId,
-        );
-        await reportResults(
-          ctx.reply.bind(ctx),
-          splitMintResults(overall),
-          "Mint",
-        );
-        await ctx.reply("Mint execution completed!");
-      } catch (error) {
-        await ctx.reply(`Mint failed: ${error.message}`);
-      }
+    session.stage = stages[choice - 1];
+
+    const encryptedKeys = session.encryptedKeys;
+    if (!encryptedKeys || encryptedKeys.length === 0) {
+      await ctx.reply(
+        "Wallet data missing. Please start the mint process again.",
+      );
+      return;
+    }
+
+    if (isStageLive(session.stage)) {
+      session.step = "confirmImmediate";
+      await ctx.reply(
+        `Selected stage: ${session.stage.label}\n\nThis stage is already live. Fire the mint immediately? (yes/no)`,
+      );
+      return;
+    }
+
+    // Not live yet — schedule automatically for the stage's own start time,
+    // no manual date/time entry needed.
+    await ctx.reply(`Selected stage: ${session.stage.label}`);
+    await scheduleMintForStage(ctx, chatId, session);
+    return;
+  }
+
+  if (session.step === "confirmImmediate") {
+    const answer = text.toLowerCase();
+    if (answer !== "yes" && answer !== "no") {
+      await ctx.reply("Please reply 'yes' or 'no'.");
+      return;
+    }
+
+    if (answer === "no") {
+      await ctx.reply("Mint canceled.");
       clearSession(chatId);
       return;
     }
 
-    const dateTimeRegex = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
-    if (!dateTimeRegex.test(dateTimeStr)) {
+    const encryptedKeys = session.encryptedKeys;
+    if (!encryptedKeys || encryptedKeys.length === 0) {
       await ctx.reply(
-        "Invalid format. Please use: YYYY-MM-DD HH:mm (or type 'now')\n(Example: 2024-12-25 14:30)",
+        "Wallet data missing. Please start the mint process again.",
       );
       return;
     }
 
     try {
-      const scheduleTime = new Date(dateTimeStr);
-      const firingTime = new Date(dateTimeStr);
-      firingTime.setSeconds(scheduleTime.getSeconds() - 30);
-
-      if (firingTime <= new Date()) {
-        await ctx.reply(
-          "The scheduled time must be more than 30 seconds in the future.",
-        );
-        return;
-      }
-
-      await agenda.schedule(firingTime, "mint", {
-        encryptedKeys,
-        slug,
-        quantity: session.quantity,
-        chain: session.chain,
+      await ctx.reply("Starting mint immediately...");
+      const privateKeys = getDecryptedKeys(encryptedKeys);
+      const overall = await mintWithWallets(
+        privateKeys,
+        session.slug,
+        session.quantity,
+        session.chain,
         chatId,
-        scheduleTime,
-      });
-
-      const formattedTime = scheduleTime.toLocaleString();
-      await ctx.reply(
-        `Mint scheduled for ${formattedTime}.\n\n✓ ${encryptedKeys.length} wallet(s)\n✓ Slug: ${slug}\n✓ Chain: ${session.chain}`,
+        undefined,
+        session.stage,
       );
-
-      clearSession(chatId);
+      await reportResults(
+        ctx.reply.bind(ctx),
+        splitMintResults(overall),
+        "Mint",
+      );
+      await ctx.reply("Mint execution completed!");
     } catch (error) {
-      await ctx.reply(`Something went wrong: ${error}`);
+      await ctx.reply(`Mint failed: ${error.message}`);
     }
+    clearSession(chatId);
     return;
   }
 });

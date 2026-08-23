@@ -7,7 +7,7 @@ import { bot } from "./bot.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function getDropStages(slug) {
+export async function getDrop(slug) {
   const response = await fetch(`${BASE_URL}/drops/${slug}`, {
     headers: { "X-API-KEY": process.env.API_KEY, accept: "application/json" },
   });
@@ -21,7 +21,12 @@ export async function getDropStages(slug) {
   }
 
   const data = await response.json();
-  return data.stages || [];
+  return data;
+}
+
+export async function getDropStages(slug) {
+  const drop = await getDrop(slug);
+  return drop.stages || [];
 }
 
 export function isStageLive(stage, now = new Date()) {
@@ -152,6 +157,15 @@ export async function waitForMint(mintTimeISO, chatId, slug, stage) {
       await sleep(50);
     } else {
       await sleep(50);
+    }
+  }
+
+  if (stage) {
+    while (true) {
+      const drop = getDrop(slug);
+      const isLive = drop.active_stage.label === stage.label;
+      if (isLive) break;
+      await sleep(100);
     }
   }
 
