@@ -31,8 +31,8 @@ export async function getDropStages(slug) {
 
 export function isStageLive(stage, now = new Date()) {
   if (!stage) return false;
-  const start = stage.startTime ? new Date(stage.startTime) : null;
-  const end = stage.endTime ? new Date(stage.endTime) : null;
+  const start = stage.start_time ? new Date(stage.start_time) : null;
+  const end = stage.end_time ? new Date(stage.end_time) : null;
   if (start && now < start) return false;
   if (end && now > end) return false;
   return true;
