@@ -127,7 +127,7 @@ async function processWallets(privateKeys, handler) {
         success.push(result);
       }
     } catch (err) {
-      console.error(err);
+      console.error("Error", err);
       const error = err.shortMessage ? err.shortMessage : err.message;
       fail.push({ pk, err: error });
     }
