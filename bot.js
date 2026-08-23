@@ -13,7 +13,7 @@ import {
   getDecryptedKeys,
   reportResults,
   splitMintResults,
-} from ".lib/utils.js";
+} from "./lib/utils.js";
 
 dotenv.config();
 
