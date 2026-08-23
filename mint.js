@@ -118,7 +118,7 @@ export async function sendTx(txData, privateKey, provider, chainId, nonce) {
   };
 }
 
-export async function waitForMint(mintTimeISO, chatId, slug) {
+export async function waitForMint(mintTimeISO, chatId, slug, stage) {
   const mintTime = new Date(mintTimeISO).getTime();
 
   await bot.api.sendMessage(chatId, `Mint scheduled for ${mintTimeISO}`);
@@ -147,10 +147,14 @@ export async function waitForMint(mintTimeISO, chatId, slug) {
         `${Math.round(remaining / 1000)}s remaining...`,
       );
       await sleep(1000);
+    } else if (stage) {
+      if (isStageLive(stage)) break;
+      await sleep(50);
     } else {
       await sleep(50);
     }
   }
+
   await bot.api.sendMessage(chatId, "Mint time reached — firing!");
 }
 
