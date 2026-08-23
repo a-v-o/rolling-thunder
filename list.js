@@ -106,8 +106,6 @@ async function prepareApprovedWallet(pk, provider, collectionSlug, chain) {
     fromAddress: wallet.address,
   });
 
-  console.log("Approved", txHash)
-
   return { wallet, tokensForCollection, openseaSDK };
 }
 
@@ -170,18 +168,23 @@ export async function transferNFTs(
   const provider = new ethers.JsonRpcProvider(RPC[chain]);
 
   return processWallets(privateKeys, async (pk) => {
+    const results = []
     const { wallet, tokensForCollection, openseaSDK } =
       await prepareApprovedWallet(pk, provider, collectionSlug, chain);
 
-    console.log(tokensForCollection)
-    console.log(toAssetList(tokensForCollection))
-
-    const txHash = await openseaSDK.bulkTransfer({
-      assets: toAssetList(tokensForCollection, { toAddress: recipientAddress }),
-      fromAddress: wallet.address,
-    });
-
-    return { pk, txHash };
+    for (const token of tokensForCollection) {
+      const txHash = await openseaSDK.transfer({
+        asset: {
+          tokenAddress: token.contract,
+          tokenId: token.tokenId,
+          tokenStandard: TokenStandard.ERC721
+        },
+        fromAddress: wallet.address,
+        toAddress: recipientAddress
+      })
+      results.push({tx, txHash})
+    }
+    return results;
   });
 }
 
