@@ -5,6 +5,34 @@ dotenv.config();
 import { BASE_URL, RPC } from "./variables.js";
 import { bot } from "./bot.js";
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export async function getDropStages(slug) {
+  const response = await fetch(`${BASE_URL}/drops/${slug}`, {
+    headers: { "X-API-KEY": process.env.API_KEY, accept: "application/json" },
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const errorString = (data.errors || []).join(", ") || response.statusText;
+    throw new Error(
+      `Failed to fetch drop stages: HTTP ${response.status} ${errorString}`,
+    );
+  }
+
+  const data = await response.json();
+  return data.stages || [];
+}
+
+export function isStageLive(stage, now = new Date()) {
+  if (!stage) return false;
+  const start = stage.startTime ? new Date(stage.startTime) : null;
+  const end = stage.endTime ? new Date(stage.endTime) : null;
+  if (start && now < start) return false;
+  if (end && now > end) return false;
+  return true;
+}
+
 export async function getCollectionDetails(slug) {
   try {
     const response = await fetch(`${BASE_URL}/collections/${slug}`);
@@ -66,19 +94,6 @@ export async function getMintPayload(
   }
 }
 
-// export async function checkBalance(privateKey) {
-//   const provider = new ethers.JsonRpcProvider(DROP.rpcUrl);
-//   const wallet = new ethers.Wallet(privateKey, provider);
-//   const balance = await provider.getBalance(wallet.address);
-//   console.log(privateKey, `Balance: ${ethers.formatEther(balance)} ETH`);
-//   return balance;
-// }
-
-// export async function checkBalances(privateKeys) {
-//   const balances = await Promise.all(privateKeys.map((pk) => checkBalance(pk)));
-//   return balances;
-// }
-
 export async function sendTx(txData, privateKey, provider, chainId, nonce) {
   const wallet = new ethers.Wallet(privateKey, provider);
   const txValue = BigInt(txData.value || "0");
@@ -139,8 +154,6 @@ export async function waitForMint(mintTimeISO, chatId, slug) {
   await bot.api.sendMessage(chatId, "Mint time reached — firing!");
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 export async function fetchChainIdAndNonce(walletAddress, provider) {
   const [chainId, nonce] = await Promise.all([
     provider.getNetwork().then((network) => network.chainId),
@@ -191,19 +204,30 @@ export async function mintWithWallets(
   const provider = new ethers.JsonRpcProvider(rpcUrl);
 
   const walletPromises = privateKeys.map((pk) => prepareWallet(pk, provider));
+  const preparedResults = await Promise.allSettled(walletPromises);
 
-  const preparedWalletPromises = await Promise.allSettled(walletPromises);
-
-  const preparedWallets = preparedWalletPromises.map(
-    (promise) => promise.value,
+  const prepared = preparedResults.map((result, i) =>
+    result.status === "fulfilled"
+      ? { ok: true, wallet: result.value }
+      : {
+          ok: false,
+          privateKey: privateKeys[i],
+          error: result.reason?.message || String(result.reason),
+        },
   );
 
   if (scheduleTime) {
     await waitForMint(scheduleTime.toISOString(), chatId, slug);
   }
 
-  const mintPromises = preparedWallets.map((wallet) =>
-    mintWithWallet(wallet, quantity, slug, provider),
+  const mintPromises = prepared.map((entry) =>
+    entry.ok
+      ? mintWithWallet(entry.wallet, quantity, slug, provider)
+      : Promise.resolve({
+          privateKey: entry.privateKey,
+          success: false,
+          error: entry.error,
+        }),
   );
 
   const results = await Promise.allSettled(mintPromises);

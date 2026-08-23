@@ -73,53 +73,58 @@ async function getBestOfferForToken(openseaSDK, collectionSlug) {
   return best;
 }
 
-export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
-  const rpcURL = RPC[chain];
-  const provider = new ethers.JsonRpcProvider(rpcURL);
+function toAssetList(tokens, extra = {}) {
+  return tokens.map((token) => ({
+    asset: {
+      tokenAddress: token.contract,
+      tokenId: token.tokenId,
+      tokenStandard: TokenStandard.ERC721,
+    },
+    ...extra,
+  }));
+}
 
+/**
+ * Shared setup used by every wallet-driven operation below: builds the
+ * wallet/SDK for a private key, fetches the wallet's tokens for the given
+ * collection, and approves them.
+ */
+async function prepareApprovedWallet(pk, provider, collectionSlug, chain) {
+  const wallet = new ethers.Wallet(pk, provider);
+  const tokensForCollection = await getWalletTokensInCollection(
+    wallet.address,
+    collectionSlug,
+    chain,
+  );
+  const openseaSDK = new OpenSeaSDK(wallet, {
+    chain: SDK_CHAINS[chain],
+    apiKey: OPENSEA_API_KEY,
+  });
+
+  await openseaSDK.batchApproveAssets({
+    assets: toAssetList(tokensForCollection),
+    fromAddress: wallet.address,
+  });
+
+  return { wallet, tokensForCollection, openseaSDK };
+}
+
+/**
+ * Runs `handler` for each private key, collecting successes/failures in the
+ * { success, fail } shape used throughout the bot. `handler` may return a
+ * single { pk, txHash } entry or an array of them.
+ */
+async function processWallets(privateKeys, handler) {
   const success = [];
   const fail = [];
 
   for (const pk of privateKeys) {
     try {
-      const wallet = new ethers.Wallet(pk, provider);
-      const tokensForCollection = await getWalletTokensInCollection(
-        wallet.address,
-        collectionSlug,
-        chain,
-      );
-      const sdkChain = SDK_CHAINS[chain];
-      const openseaSDK = new OpenSeaSDK(wallet, {
-        chain: sdkChain,
-        apiKey: OPENSEA_API_KEY,
-      });
-
-      const assets = tokensForCollection.map((token) => ({
-        asset: {
-          tokenAddress: token.contract,
-          tokenId: token.tokenId,
-          tokenStandard: TokenStandard.ERC721,
-        },
-      }));
-
-      await openseaSDK.batchApproveAssets({
-        assets: assets,
-        fromAddress: wallet.address,
-      });
-
-      for (const token of tokensForCollection) {
-        const bestOffer = await getBestOfferForToken(
-          openseaSDK,
-          collectionSlug,
-        );
-
-        const txHash = await openseaSDK.fulfillOrder({
-          order: bestOffer,
-          accountAddress: wallet.address,
-          tokenId: token.tokenId,
-          assetContractAddress: token.contract,
-        });
-        success.push({ pk, txHash });
+      const result = await handler(pk);
+      if (Array.isArray(result)) {
+        success.push(...result);
+      } else if (result) {
+        success.push(result);
       }
     } catch (err) {
       console.error(err);
@@ -127,7 +132,31 @@ export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
       fail.push({ pk, err: error });
     }
   }
+
   return { success, fail };
+}
+
+export async function acceptBestOffer(privateKeys, collectionSlug, chain) {
+  const provider = new ethers.JsonRpcProvider(RPC[chain]);
+
+  return processWallets(privateKeys, async (pk) => {
+    const { wallet, tokensForCollection, openseaSDK } =
+      await prepareApprovedWallet(pk, provider, collectionSlug, chain);
+
+    const results = [];
+    for (const token of tokensForCollection) {
+      const bestOffer = await getBestOfferForToken(openseaSDK, collectionSlug);
+
+      const txHash = await openseaSDK.fulfillOrder({
+        order: bestOffer,
+        accountAddress: wallet.address,
+        tokenId: token.tokenId,
+        assetContractAddress: token.contract,
+      });
+      results.push({ pk, txHash });
+    }
+    return results;
+  });
 }
 
 export async function transferNFTs(
@@ -136,60 +165,18 @@ export async function transferNFTs(
   chain,
   recipientAddress,
 ) {
-  const rpcURL = RPC[chain];
-  const provider = new ethers.JsonRpcProvider(rpcURL);
+  const provider = new ethers.JsonRpcProvider(RPC[chain]);
 
-  const success = [];
-  const fail = [];
+  return processWallets(privateKeys, async (pk) => {
+    const { wallet, tokensForCollection, openseaSDK } =
+      await prepareApprovedWallet(pk, provider, collectionSlug, chain);
 
-  for (const pk of privateKeys) {
-    try {
-      const wallet = new ethers.Wallet(pk, provider);
-      const tokensForCollection = await getWalletTokensInCollection(
-        wallet.address,
-        collectionSlug,
-        chain,
-      );
-      const sdkChain = SDK_CHAINS[chain];
-      const openseaSDK = new OpenSeaSDK(wallet, {
-        chain: sdkChain,
-        apiKey: OPENSEA_API_KEY,
-      });
-
-      const assetsToApprove = tokensForCollection.map((token) => ({
-        asset: {
-          tokenAddress: token.contract,
-          tokenId: token.tokenId,
-          tokenStandard: TokenStandard.ERC721,
-        },
-      }));
-
-      const assetsToTransfer = tokensForCollection.map((token) => ({
-        asset: {
-          tokenAddress: token.contract,
-          tokenId: token.tokenId,
-          tokenStandard: TokenStandard.ERC721,
-          toAddress: recipientAddress,
-        },
-      }));
-
-      await openseaSDK.batchApproveAssets({
-        assets: assetsToApprove,
-        fromAddress: wallet.address,
-      });
-
-      const txHash = await openseaSDK.bulkTransfer({
-        assets: assetsToTransfer,
-        fromAddress: wallet.address,
-      });
-      success.push({ pk, txHash });
-    } catch (err) {
-      console.error(err);
-      const error = err.shortMessage ? err.shortMessage : err.message;
-      fail.push({ pk, err: error });
-    }
-  }
-  return { success, fail };
+    const txHash = await openseaSDK.bulkTransfer({
+      assets: toAssetList(tokensForCollection, { toAddress: recipientAddress }),
+      fromAddress: wallet.address,
+    });
+    return { pk, txHash };
+  });
 }
 
 async function getFloorPrice(openseaSDK, collectionSlug) {
@@ -216,56 +203,45 @@ async function getEthUsdRate() {
   return rate;
 }
 
-export async function listNfts(privateKeys, collectionSlug, price, chain) {
-  const rpcURL = RPC[chain];
-  const provider = new ethers.JsonRpcProvider(rpcURL);
-
-  const success = [];
-  const fail = [];
-
-  for (const pk of privateKeys) {
-    try {
-      const wallet = new ethers.Wallet(pk, provider);
-      const tokensForCollection = await getWalletTokensInCollection(
-        wallet.address,
-        collectionSlug,
-        chain,
-      );
-      const sdkChain = SDK_CHAINS[chain];
-      const openseaSDK = new OpenSeaSDK(wallet, {
-        chain: sdkChain,
-        apiKey: OPENSEA_API_KEY,
-      });
-
-      let amountEth;
-
-      if (price === "floor") {
-        amountEth = await getFloorPrice(openseaSDK, collectionSlug);
-      } else {
-        if (!price || price <= 0) {
-          throw new Error("Price must be provided and must be positive");
-        }
-        const ethUsdRate = await getEthUsdRate();
-        amountEth = price / ethUsdRate;
-      }
-
-      for (const token of tokensForCollection) {
-        const listing = await openseaSDK.createListing({
-          asset: {
-            tokenId: token.tokenId,
-            tokenAddress: token.contract,
-          },
-          accountAddress: wallet.address,
-          amount: amountEth,
-        });
-
-        success.push({ pk, txHash: listing.orderHash });
-      }
-    } catch (err) {
-      console.error(err);
-      const error = err.shortMessage ? err.shortMessage : err.message;
-      fail.push({ pk, err: error });
-    }
+async function resolveListingAmountEth(openseaSDK, collectionSlug, price) {
+  if (price === "floor") {
+    return getFloorPrice(openseaSDK, collectionSlug);
   }
-  return { success, fail };
+
+  const numericPrice = Number(price);
+  if (!price || Number.isNaN(numericPrice) || numericPrice <= 0) {
+    throw new Error("Price must be a positive number, or 'floor'");
+  }
+
+  const ethUsdRate = await getEthUsdRate();
+  return numericPrice / ethUsdRate;
+}
+
+export async function listNfts(privateKeys, collectionSlug, price, chain) {
+  const provider = new ethers.JsonRpcProvider(RPC[chain]);
+
+  return processWallets(privateKeys, async (pk) => {
+    const { wallet, tokensForCollection, openseaSDK } =
+      await prepareApprovedWallet(pk, provider, collectionSlug, chain);
+
+    const amountEth = await resolveListingAmountEth(
+      openseaSDK,
+      collectionSlug,
+      price,
+    );
+
+    const results = [];
+    for (const token of tokensForCollection) {
+      const listing = await openseaSDK.createListing({
+        asset: {
+          tokenId: token.tokenId,
+          tokenAddress: token.contract,
+        },
+        accountAddress: wallet.address,
+        amount: amountEth,
+      });
+      results.push({ pk, txHash: listing.orderHash });
+    }
+    return results;
+  });
 }
