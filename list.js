@@ -101,7 +101,7 @@ async function prepareApprovedWallet(pk, provider, collectionSlug, chain) {
     apiKey: OPENSEA_API_KEY,
   });
 
-  await openseaSDK.batchApproveAssets({
+  const txHash = await openseaSDK.batchApproveAssets({
     assets: toAssetList(tokensForCollection),
     fromAddress: wallet.address,
   });
@@ -127,7 +127,7 @@ async function processWallets(privateKeys, handler) {
         success.push(result);
       }
     } catch (err) {
-      console.error(err);
+      console.error("Error", err);
       const error = err.shortMessage ? err.shortMessage : err.message;
       fail.push({ pk, err: error });
     }
@@ -168,14 +168,25 @@ export async function transferNFTs(
   const provider = new ethers.JsonRpcProvider(RPC[chain]);
 
   return processWallets(privateKeys, async (pk) => {
+    const results = []
     const { wallet, tokensForCollection, openseaSDK } =
       await prepareApprovedWallet(pk, provider, collectionSlug, chain);
 
-    const txHash = await openseaSDK.bulkTransfer({
-      assets: toAssetList(tokensForCollection, { toAddress: recipientAddress }),
-      fromAddress: wallet.address,
-    });
-    return { pk, txHash };
+    for (const token of tokensForCollection) {
+      const txHash = await openseaSDK.transfer({
+        asset: {
+          tokenAddress: token.contract,
+          tokenId: token.tokenId,
+          tokenStandard: TokenStandard.ERC721
+        },
+        fromAddress: wallet.address,
+        toAddress: recipientAddress
+      })
+      console.log(txHash)
+      results.push({pk, txHash})
+    }
+    console.log(results)
+    return results;
   });
 }
 
