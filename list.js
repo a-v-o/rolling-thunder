@@ -182,7 +182,7 @@ export async function transferNFTs(
         fromAddress: wallet.address,
         toAddress: recipientAddress
       })
-      results.push({tx, txHash})
+      results.push({pk, txHash})
     }
     return results;
   });
