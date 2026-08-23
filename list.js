@@ -185,6 +185,7 @@ export async function transferNFTs(
       console.log(txHash)
       results.push({pk, txHash})
     }
+    console.log(results)
     return results;
   });
 }
