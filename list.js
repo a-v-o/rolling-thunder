@@ -101,10 +101,12 @@ async function prepareApprovedWallet(pk, provider, collectionSlug, chain) {
     apiKey: OPENSEA_API_KEY,
   });
 
-  await openseaSDK.batchApproveAssets({
+  const txHash = await openseaSDK.batchApproveAssets({
     assets: toAssetList(tokensForCollection),
     fromAddress: wallet.address,
   });
+
+  console.log("Approved", txHash)
 
   return { wallet, tokensForCollection, openseaSDK };
 }
@@ -171,10 +173,14 @@ export async function transferNFTs(
     const { wallet, tokensForCollection, openseaSDK } =
       await prepareApprovedWallet(pk, provider, collectionSlug, chain);
 
+    console.log(tokensForCollection)
+    console.log(toAssetList(tokensForCollection))
+
     const txHash = await openseaSDK.bulkTransfer({
       assets: toAssetList(tokensForCollection, { toAddress: recipientAddress }),
       fromAddress: wallet.address,
     });
+
     return { pk, txHash };
   });
 }
