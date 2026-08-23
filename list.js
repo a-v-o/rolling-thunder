@@ -5,6 +5,10 @@ import { BASE_URL, RPC, SDK_CHAINS } from "./variables.js";
 
 const OPENSEA_API_KEY = process.env.API_KEY;
 
+const ERC721_TRANSFER_ABI = [
+  "function safeTransferFrom(address from, address to, uint256 tokenId)",
+];
+
 function isCollectionWideOffer(offer) {
   return !offer.criteria?.trait;
 }
@@ -84,15 +88,20 @@ function toAssetList(tokens, extra = {}) {
   }));
 }
 
-/**
- * Shared setup used by every wallet-driven operation below: builds the
- * wallet/SDK for a private key, fetches the wallet's tokens for the given
- * collection, and approves them.
- */
-async function prepareApprovedWallet(pk, provider, collectionSlug, chain) {
+async function prepareWalletAndTokens(pk, provider, collectionSlug, chain) {
   const wallet = new ethers.Wallet(pk, provider);
   const tokensForCollection = await getWalletTokensInCollection(
     wallet.address,
+    collectionSlug,
+    chain,
+  );
+  return { wallet, tokensForCollection };
+}
+
+async function prepareApprovedWallet(pk, provider, collectionSlug, chain) {
+  const { wallet, tokensForCollection } = await prepareWalletAndTokens(
+    pk,
+    provider,
     collectionSlug,
     chain,
   );
@@ -101,7 +110,7 @@ async function prepareApprovedWallet(pk, provider, collectionSlug, chain) {
     apiKey: OPENSEA_API_KEY,
   });
 
-  const txHash = await openseaSDK.batchApproveAssets({
+  await openseaSDK.batchApproveAssets({
     assets: toAssetList(tokensForCollection),
     fromAddress: wallet.address,
   });
@@ -168,24 +177,33 @@ export async function transferNFTs(
   const provider = new ethers.JsonRpcProvider(RPC[chain]);
 
   return processWallets(privateKeys, async (pk) => {
-    const results = []
-    const { wallet, tokensForCollection, openseaSDK } =
-      await prepareApprovedWallet(pk, provider, collectionSlug, chain);
+    const { wallet, tokensForCollection } = await prepareWalletAndTokens(
+      pk,
+      provider,
+      collectionSlug,
+      chain,
+    );
 
+    const results = [];
     for (const token of tokensForCollection) {
-      const txHash = await openseaSDK.transfer({
-        asset: {
-          tokenAddress: token.contract,
-          tokenId: token.tokenId,
-          tokenStandard: TokenStandard.ERC721
-        },
-        fromAddress: wallet.address,
-        toAddress: recipientAddress
-      })
-      console.log(txHash)
-      results.push({pk, txHash})
+      const nftContract = new ethers.Contract(
+        token.contract,
+        ERC721_TRANSFER_ABI,
+        wallet,
+      );
+      const tx = await nftContract.safeTransferFrom(
+        wallet.address,
+        recipientAddress,
+        token.tokenId,
+      );
+      const receipt = await tx.wait();
+      if (receipt.status !== 1) {
+        throw new Error(
+          `Transfer reverted for token ${token.tokenId} (tx ${tx.hash})`,
+        );
+      }
+      results.push({ pk, txHash: tx.hash });
     }
-    console.log(results)
     return results;
   });
 }
