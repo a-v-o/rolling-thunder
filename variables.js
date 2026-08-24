@@ -8,10 +8,12 @@ export const RPC = {
   ethereum: process.env.ETHEREUM_RPC_URL,
   robinhood: process.env.ROBINHOOD_RPC_URL,
   base: process.env.BASE_RPC_URL,
+  ink: process.env.INK_RPC_URL,
 };
 
 export const SDK_CHAINS = {
   ethereum: Chain.Mainnet,
   robinhood: Chain.Robinhood,
   base: Chain.Base,
+  ink: Chain.Ink,
 };
