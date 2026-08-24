@@ -67,25 +67,25 @@ await agenda.start();
 const FLOW_CONFIG = {
   mint: {
     chainPrompt:
-      "Now send the target chain for minting (for example: ethereum, robinhood, base).",
+      "Now send the target chain for minting (for example: ethereum, robinhood, base, ink).",
     nextStep: "amount",
     nextPrompt: "Enter the amount of nft's you'd like to mint.",
   },
   sell: {
     chainPrompt:
-      "Now send the target chain for selling (Mainnet, Robinhood, or Base).",
+      "Now send the target chain for selling (ethereum, robinhood, base, ink).",
     nextStep: "slug",
     nextPrompt: "Enter the nft's opensea slug.",
   },
   transfer: {
     chainPrompt:
-      "Now send the target chain for transferring the nfts (Mainnet, Robinhood, or Base).",
+      "Now send the target chain for transferring the nfts (ethereum, robinhood, base, ink).",
     nextStep: "slug",
     nextPrompt: "Enter the nft's opensea slug.",
   },
   list: {
     chainPrompt:
-      "Now send the target chain for listing the nfts (Mainnet, Robinhood, or Base).",
+      "Now send the target chain for listing the nfts (ethereum, robinhood, base, ink).",
     nextStep: "slug",
     nextPrompt: "Enter the nft's opensea slug.",
   },
