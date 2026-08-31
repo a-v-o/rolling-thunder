@@ -527,7 +527,6 @@ bot.catch((err) => {
 
 bot.start();
 
-// Resume any active monitoring sessions from previous runs
 resumeActiveMonitors().catch((err) => {
   console.error("Failed to resume monitors:", err);
 });
