@@ -128,6 +128,27 @@ bot.command("start", async (ctx) => {
   await ctx.reply(START_TEXT, { reply_markup: mainMenu });
 });
 
+bot.command("untrack", async (ctx) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  await stopMonitoring(chatId);
+  await deactivateTrackedWallets(chatId);
+  await clearBotWallets(chatId);
+  await ctx.reply("Monitoring stopped and all tracked wallets cleared.");
+});
+
+bot.command("wallets", async (ctx) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const wallets = await getTrackedWallets(chatId);
+  if (!wallets || wallets.length === 0) {
+    await ctx.reply("No wallets being tracked. Use the Track menu to start.");
+    return;
+  }
+  const list = wallets.map((w) => `- ${w.address} (${w.chain})`).join("\n");
+  await ctx.reply(`Tracked wallets:\n${list}`);
+});
+
 /**
  * Schedules a mint for a stage's own startTime — used when the selected
  * stage isn't live yet. Replaces manual date/time entry: the stage's start
@@ -498,27 +519,6 @@ bot.on("message:text", async (ctx) => {
 
 app.listen(PORT, () => {
   console.log(`Express server listening on port ${PORT}`);
-});
-
-bot.command("untrack", async (ctx) => {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-  await stopMonitoring(chatId);
-  await deactivateTrackedWallets(chatId);
-  await clearBotWallets(chatId);
-  await ctx.reply("Monitoring stopped and all tracked wallets cleared.");
-});
-
-bot.command("wallets", async (ctx) => {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-  const wallets = await getTrackedWallets(chatId);
-  if (!wallets || wallets.length === 0) {
-    await ctx.reply("No wallets being tracked. Use the Track menu to start.");
-    return;
-  }
-  const list = wallets.map((w) => `- ${w.address} (${w.chain})`).join("\n");
-  await ctx.reply(`Tracked wallets:\n${list}`);
 });
 
 bot.catch((err) => {

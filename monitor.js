@@ -58,8 +58,9 @@ export async function triggerReplayMint(chatId, event) {
   for (const pk of privateKeys) {
     try {
       const walletData = await prepareWallet(pk, provider);
+      const walletAddress = new ethers.Wallet(walletData.privateKey).address;
       const txData = await getMintPayload(
-        walletData.address,
+        walletAddress,
         quantity,
         collectionSlug,
       );
