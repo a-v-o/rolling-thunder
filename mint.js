@@ -4,11 +4,8 @@ dotenv.config();
 
 import { BASE_URL, RPC } from "./variables.js";
 import { bot } from "./bot.js";
-import { replayMint } from "./monitor.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-export { replayMint };
 
 export async function getDrop(slug) {
   const response = await fetch(`${BASE_URL}/drops/${slug}`, {
