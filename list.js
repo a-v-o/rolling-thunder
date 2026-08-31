@@ -1,6 +1,5 @@
 import { ethers } from "ethers";
 import { OpenSeaSDK, TokenStandard } from "@opensea/sdk";
-
 import { BASE_URL, RPC, SDK_CHAINS } from "./variables.js";
 
 const OPENSEA_API_KEY = process.env.API_KEY;

@@ -1,8 +1,6 @@
 import dotenv from "dotenv";
 import { Bot } from "grammy";
 import { Menu } from "@grammyjs/menu";
-import { Agenda } from "agenda";
-import { MongoBackend } from "@agendajs/mongo-backend";
 import { encryptPrivateKey } from "./lib/crypto.js";
 import { startSession, getSession, clearSession } from "./lib/mintSession.js";
 import { START_TEXT, HELP_TEXT } from "./lib/messages.js";
@@ -14,6 +12,19 @@ import {
   reportResults,
   splitMintResults,
 } from "./lib/utils.js";
+import { agenda } from "./agenda.js";
+import {
+  saveBotWalletsEncrypted,
+  saveTrackedWallets,
+  getTrackedWallets,
+  deactivateTrackedWallets,
+  clearBotWallets,
+} from "./lib/walletStorage.js";
+import {
+  startMonitoring,
+  stopMonitoring,
+  resumeActiveMonitors,
+} from "./monitor.js";
 
 dotenv.config();
 
@@ -25,15 +36,6 @@ const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
   res.send("Server is running and bot is polling!");
-});
-
-const agenda = new Agenda({
-  backend: new MongoBackend({
-    address: process.env.MONGODB_URI,
-    collection: "agendaJobs",
-  }),
-  processEvery: "15 seconds",
-  removeOnComplete: true,
 });
 
 agenda.define("mint", async (job) => {
@@ -89,19 +91,27 @@ const FLOW_CONFIG = {
     nextStep: "slug",
     nextPrompt: "Enter the nft's opensea slug.",
   },
+  track: {
+    chainPrompt:
+      "Now send the chain to monitor (ethereum, robinhood, base, ink).",
+    nextStep: "addresses",
+    nextPrompt: "Enter the wallet addresses to track, one per line.",
+  },
 };
 
 const mainMenu = new Menu("main-menu");
 
-for (const label of ["Mint", "Sell", "Transfer", "List"]) {
+for (const label of ["Mint", "Sell", "Transfer", "List", "Track"]) {
   mainMenu
     .text(label, async (ctx) => {
       const chatId = ctx.chat?.id;
       if (!chatId) return;
       startSession(chatId, label.toLowerCase());
-      await ctx.reply(
-        "Please send your private key(s), one per line.\nSend /cancel to stop.",
-      );
+      const prompt =
+        label === "Track"
+          ? "Send your bot private key(s) for replay minting, one per line.\nSend /cancel to stop."
+          : "Please send your private key(s), one per line.\nSend /cancel to stop.";
+      await ctx.reply(prompt);
     })
     .row();
 }
@@ -206,6 +216,21 @@ bot.on("message:text", async (ctx) => {
 
   if (session.step === "chain") {
     session.chain = text.toLowerCase();
+
+    if (session.type === "track" && session.encryptedKeys?.length > 0) {
+      try {
+        await saveBotWalletsEncrypted(
+          chatId,
+          session.encryptedKeys,
+          session.chain,
+        );
+      } catch (err) {
+        await ctx.reply(`Failed to save bot wallets: ${err.message}`);
+        clearSession(chatId);
+        return;
+      }
+    }
+
     session.step = config.nextStep;
     await ctx.reply(config.nextPrompt);
     return;
@@ -419,10 +444,81 @@ bot.on("message:text", async (ctx) => {
     clearSession(chatId);
     return;
   }
+
+  if (session.step === "addresses") {
+    const addresses = text
+      .split("\n")
+      .map((a) => a.trim())
+      .filter((a) => a.length > 0);
+
+    if (addresses.length === 0) {
+      await ctx.reply("Please send at least one valid wallet address.");
+      return;
+    }
+
+    const chain = session.chain;
+    if (!chain) {
+      await ctx.reply("Chain not set. Please start again.");
+      clearSession(chatId);
+      return;
+    }
+
+    try {
+      const saved = await saveTrackedWallets(chatId, addresses, chain);
+      session.step = "confirm";
+      await ctx.reply(
+        `Tracking ${saved.length} wallet(s) on ${chain}.\n\nSend "confirm" to start monitoring, or /cancel to abort.`,
+      );
+    } catch (err) {
+      await ctx.reply(`Failed to save tracked wallets: ${err.message}`);
+      clearSession(chatId);
+    }
+    return;
+  }
+
+  if (session.step === "confirm") {
+    const answer = text.trim().toLowerCase();
+    if (answer !== "confirm") {
+      await ctx.reply('Send "confirm" to start, or /cancel to abort.');
+      return;
+    }
+
+    try {
+      await startMonitoring(chatId);
+      await ctx.reply(
+        `Monitoring active! Tracking ${session.encryptedKeys?.length || 0} bot wallet(s) and your specified addresses.`,
+      );
+    } catch (err) {
+      await ctx.reply(`Failed to start monitoring: ${err.message}`);
+    }
+    clearSession(chatId);
+    return;
+  }
 });
 
 app.listen(PORT, () => {
   console.log(`Express server listening on port ${PORT}`);
+});
+
+bot.command("untrack", async (ctx) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  await stopMonitoring(chatId);
+  await deactivateTrackedWallets(chatId);
+  await clearBotWallets(chatId);
+  await ctx.reply("Monitoring stopped and all tracked wallets cleared.");
+});
+
+bot.command("wallets", async (ctx) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const wallets = await getTrackedWallets(chatId);
+  if (!wallets || wallets.length === 0) {
+    await ctx.reply("No wallets being tracked. Use the Track menu to start.");
+    return;
+  }
+  const list = wallets.map((w) => `- ${w.address} (${w.chain})`).join("\n");
+  await ctx.reply(`Tracked wallets:\n${list}`);
 });
 
 bot.catch((err) => {
@@ -430,4 +526,10 @@ bot.catch((err) => {
 });
 
 bot.start();
+
+// Resume any active monitoring sessions from previous runs
+resumeActiveMonitors().catch((err) => {
+  console.error("Failed to resume monitors:", err);
+});
+
 console.log("Telegram mint bot running");
