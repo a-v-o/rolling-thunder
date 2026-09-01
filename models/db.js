@@ -18,6 +18,7 @@ const trackedWalletSchema = new mongoose.Schema({
   chain: { type: String, required: true },
   lastCursor: { type: String, default: null },
   lastPolledAt: { type: Date, default: null },
+  lastEventTimestamp: { type: Date, default: null },
   active: { type: Boolean, default: true },
 });
 

@@ -18,6 +18,9 @@ import {
   saveTrackedWallets,
   getTrackedWallets,
   deactivateTrackedWallets,
+  deactivateSpecificWallets,
+  reactivateTrackedWallets,
+  getInactiveTrackedWallets,
   clearBotWallets,
 } from "./lib/walletStorage.js";
 import {
@@ -131,22 +134,90 @@ bot.command("start", async (ctx) => {
 bot.command("untrack", async (ctx) => {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
-  await stopMonitoring(chatId);
-  await deactivateTrackedWallets(chatId);
-  await clearBotWallets(chatId);
-  await ctx.reply("Monitoring stopped and all tracked wallets cleared.");
+
+  const args = ctx.match?.toString().trim();
+  if (args) {
+    // Untrack specific wallets
+    const addresses = args.split("\n").map((a) => a.trim());
+    await deactivateSpecificWallets(chatId, addresses);
+    await ctx.reply(`Stopped tracking ${addresses.length} wallet(s).`);
+  } else {
+    // Untrack all wallets
+    await stopMonitoring(chatId);
+    await deactivateTrackedWallets(chatId);
+    await clearBotWallets(chatId);
+    await ctx.reply("Monitoring stopped and all tracked wallets cleared.");
+  }
 });
 
 bot.command("wallets", async (ctx) => {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
-  const wallets = await getTrackedWallets(chatId);
-  if (!wallets || wallets.length === 0) {
+  const active = await getTrackedWallets(chatId);
+  const inactive = await getInactiveTrackedWallets(chatId);
+  if (active.length === 0 && inactive.length === 0) {
     await ctx.reply("No wallets being tracked. Use the Track menu to start.");
     return;
   }
-  const list = wallets.map((w) => `- ${w.address} (${w.chain})`).join("\n");
-  await ctx.reply(`Tracked wallets:\n${list}`);
+  let msg = "";
+  if (active.length > 0) {
+    msg += `Active wallets:\n${active.map((w) => `- ${w.address} (${w.chain})`).join("\n")}\n`;
+  }
+  if (inactive.length > 0) {
+    msg += `\nInactive wallets:\n${inactive.map((w) => `- ${w.address} (${w.chain})`).join("\n")}`;
+  }
+  await ctx.reply(msg);
+});
+
+bot.command("unschedule", async (ctx) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  const slug = ctx.match?.toString().trim();
+  if (!slug) {
+    await ctx.reply("Usage: /unschedule <collection-slug>");
+    return;
+  }
+
+  const jobs = await agenda.jobs({
+    name: "mint",
+    "data.chatId": chatId,
+    "data.slug": slug,
+  });
+
+  if (jobs.length === 0) {
+    await ctx.reply(`No scheduled mints found for "${slug}".`);
+    return;
+  }
+
+  await agenda.cancel({
+    name: "mint",
+    "data.chatId": chatId,
+    "data.slug": slug,
+  });
+  await ctx.reply(`Canceled ${jobs.length} scheduled mint(s) for "${slug}".`);
+});
+
+bot.command("resumetracking", async (ctx) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  const args = ctx.match?.toString().trim();
+  let count;
+  if (args) {
+    // Resume specific wallets
+    const addresses = args.split("\n").map((a) => a.trim());
+    count = await reactivateTrackedWallets(chatId, addresses);
+  } else {
+    // Resume all inactive wallets
+    count = await reactivateTrackedWallets(chatId);
+  }
+
+  if (count === 0) {
+    await ctx.reply("No inactive wallets to resume.");
+  } else {
+    await ctx.reply(`Resumed tracking ${count} wallet(s).`);
+  }
 });
 
 /**

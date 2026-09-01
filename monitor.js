@@ -7,17 +7,11 @@ import { getMintPayload, sendTx, prepareWallet, getDrop } from "./mint.js";
 import { bot } from "./bot.js";
 import { agenda } from "./agenda.js";
 
-/**
- * Determine the mint quantity for a drop. Uses maxMintablePerWallet from
- * the drop data, capped by the remaining supply. Falls back to 1 if the
- * drop data is unavailable.
- */
 async function resolveMintQuantity(collectionSlug) {
   try {
     const drop = await getDrop(collectionSlug);
-    const maxPerWallet = drop?.max_mintable_per_wallet ?? 1;
-    const supplyLeft =
-      drop?.supply_left ?? drop?.supply ?? Number.MAX_SAFE_INTEGER;
+    const maxPerWallet = drop.active_stage.max_per_wallet ?? 1;
+    const supplyLeft = drop.total_supply ?? Number.MAX_SAFE_INTEGER;
     return Math.min(maxPerWallet, supplyLeft);
   } catch {
     return 1;
