@@ -179,7 +179,7 @@ bot.command("unschedule", async (ctx) => {
     return;
   }
 
-  const jobs = await agenda.queryJobs({
+  const { jobs, total } = await agenda.queryJobs({
     name: "mint",
     "data.chatId": chatId,
     "data.slug": slug,
