@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { Agenda } from "agenda";
 import { MongoBackend } from "@agendajs/mongo-backend";
 

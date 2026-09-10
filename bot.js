@@ -28,6 +28,8 @@ import {
   stopMonitoring,
   resumeActiveMonitors,
 } from "./monitor.js";
+import { registerMintJob } from "./lib/mintJob.js";
+import { registerFundMintTransferJob } from "./lib/fundMintJob.js";
 
 dotenv.config();
 
@@ -41,29 +43,8 @@ app.get("/", (req, res) => {
   res.send("Server is running and bot is polling!");
 });
 
-agenda.define("mint", async (job) => {
-  const { encryptedKeys, slug, quantity, chain, chatId, scheduleTime, stage } =
-    job.attrs.data;
-  const sendMessage = (text) => bot.api.sendMessage(chatId, text);
-
-  await sendMessage("Starting scheduled mint execution...");
-  try {
-    const privateKeys = getDecryptedKeys(encryptedKeys);
-    const overall = await mintWithWallets(
-      privateKeys,
-      slug,
-      quantity,
-      chain,
-      chatId,
-      scheduleTime,
-      stage,
-    );
-    await reportResults(sendMessage, splitMintResults(overall), "Mint");
-    await sendMessage("Mint execution completed!");
-  } catch (error) {
-    await sendMessage(`Mint failed: ${error.message}`);
-  }
-});
+registerMintJob(agenda, bot);
+registerFundMintTransferJob(agenda, bot);
 
 await agenda.start();
 
@@ -100,16 +81,33 @@ const FLOW_CONFIG = {
     nextStep: "addresses",
     nextPrompt: "Enter the wallet addresses to track, one per line.",
   },
+  fundMintTransfer: {
+    chainPrompt:
+      "Now send the target chain (for example: ethereum, robinhood, base, ink).",
+    nextStep: "slug",
+    nextPrompt: "Enter the NFT's OpenSea slug.",
+  },
 };
 
 const mainMenu = new Menu("main-menu");
 
-for (const label of ["Mint", "Sell", "Transfer", "List", "Track"]) {
+for (const label of [
+  "Mint",
+  "Sell",
+  "Transfer",
+  "List",
+  "Track",
+  "Fund, Mint & Transfer",
+]) {
   mainMenu
     .text(label, async (ctx) => {
       const chatId = ctx.chat?.id;
       if (!chatId) return;
-      startSession(chatId, label.toLowerCase());
+      const type =
+        label === "Fund, Mint & Transfer"
+          ? "fundMintTransfer"
+          : label.toLowerCase();
+      startSession(chatId, type);
       const prompt =
         label === "Track"
           ? "Send your bot private key(s) for replay minting, one per line.\nSend /cancel to stop."
@@ -179,7 +177,7 @@ bot.command("unschedule", async (ctx) => {
     return;
   }
 
-  const { jobs, total } = await agenda.queryJobs({
+  const { jobs } = await agenda.queryJobs({
     name: "mint",
     "data.chatId": chatId,
     "data.slug": slug,
@@ -219,6 +217,65 @@ bot.command("resumetracking", async (ctx) => {
     await ctx.reply(`Resumed tracking ${count} wallet(s).`);
   }
 });
+
+function formatStageList(stages) {
+  return stages
+    .map((stage, index) => {
+      const status = isStageLive(stage) ? "🟢 LIVE" : "⚪ not live";
+      return (
+        `${index + 1}. ${stage.label} (${status})\n` +
+        `   Price: ${stage.price}  Max/wallet: ${stage.max_per_wallet}\n` +
+        `   Start: ${stage.start_time}\n   End: ${stage.end_time}`
+      );
+    })
+    .join("\n\n");
+}
+
+async function scheduleFundMintTransfer(ctx, chatId, session) {
+  const { encryptedKeys, encryptedFundingKey, mintTime } = session;
+  if (!encryptedKeys?.length || !encryptedFundingKey || !mintTime) {
+    await ctx.reply(
+      "Wallet or stage data missing. Please start the flow again.",
+    );
+    clearSession(chatId);
+    return;
+  }
+
+  const mintTimeDate = new Date(mintTime);
+  const fundingLeadSeconds = 10;
+  const fundingTime = new Date(
+    mintTimeDate.getTime() - fundingLeadSeconds * 1000,
+  );
+
+  if (Number.isNaN(mintTimeDate.getTime()) || fundingTime <= new Date()) {
+    await ctx.reply(
+      "This stage starts too soon to schedule funding. Select a future stage with at least 10 seconds of lead time.",
+    );
+    clearSession(chatId);
+    return;
+  }
+
+  await agenda.schedule(fundingTime, "fundMintTransfer", {
+    encryptedKeys,
+    encryptedFundingKey,
+    destination: session.destination,
+    slug: session.slug,
+    quantity: session.quantity,
+    chain: session.chain,
+    mintTime: mintTimeDate,
+    stage: session.stage,
+    chatId,
+  });
+
+  await ctx.reply(
+    `Fund, mint, and transfer scheduled.\n\n` +
+      `Funding: ${fundingTime.toLocaleString()}\n` +
+      `Mint stage: ${session.stage.label} at ${mintTimeDate.toLocaleString()}\n` +
+      `Wallets: ${encryptedKeys.length}\n` +
+      `Destination: ${session.destination}`,
+  );
+  clearSession(chatId);
+}
 
 /**
  * Schedules a mint for a stage's own startTime — used when the selected
@@ -335,6 +392,15 @@ bot.on("message:text", async (ctx) => {
       return;
     }
     session.quantity = text;
+
+    if (session.type === "fundMintTransfer") {
+      session.step = "destination";
+      await ctx.reply(
+        "Enter the destination wallet address for the minted NFT(s).",
+      );
+      return;
+    }
+
     session.step = "slug";
     await ctx.reply("Enter the nft's opensea slug.");
     return;
@@ -343,7 +409,7 @@ bot.on("message:text", async (ctx) => {
   if (session.step === "slug") {
     session.slug = text;
 
-    if (session.type === "mint") {
+    if (session.type === "mint" || session.type === "fundMintTransfer") {
       let stages;
       try {
         stages = await getDropStages(session.slug);
@@ -364,18 +430,9 @@ bot.on("message:text", async (ctx) => {
       session.stages = stages;
       session.step = "stage";
 
-      const stageList = stages
-        .map((stage, i) => {
-          const status = isStageLive(stage) ? "🟢 LIVE" : "⚪ not live";
-          return (
-            `${i + 1}. ${stage.label} (${status})\n` +
-            `   Price: ${stage.price}  Max/wallet: ${stage.max_per_wallet}\n` +
-            `   Start: ${stage.start_time}\n   End: ${stage.end_time}`
-          );
-        })
-        .join("\n\n");
-
-      await ctx.reply(`Select a mint stage by number:\n\n${stageList}`);
+      await ctx.reply(
+        `Select a mint stage by number:\n\n${formatStageList(stages)}`,
+      );
       return;
     }
 
@@ -457,6 +514,33 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
+  if (session.step === "destination") {
+    session.destination = text;
+    session.step = "fundingKey";
+    await ctx.reply(
+      "Send the funding wallet private key. It will be encrypted for this session and never stored as plain text.",
+    );
+    return;
+  }
+
+  if (session.step === "fundingKey") {
+    if (text.length < 64) {
+      await ctx.reply(
+        "That does not look like a valid private key. Please try again.",
+      );
+      return;
+    }
+
+    try {
+      session.encryptedFundingKey = encryptPrivateKey(text);
+      await scheduleFundMintTransfer(ctx, chatId, session);
+    } catch (error) {
+      await ctx.reply(`Could not protect the funding key: ${error.message}`);
+      clearSession(chatId);
+    }
+    return;
+  }
+
   if (session.step === "stage") {
     const stages = session.stages || [];
     const choice = Number(text);
@@ -472,6 +556,15 @@ bot.on("message:text", async (ctx) => {
     if (!encryptedKeys || encryptedKeys.length === 0) {
       await ctx.reply(
         "Wallet data missing. Please start the mint process again.",
+      );
+      return;
+    }
+
+    if (session.type === "fundMintTransfer") {
+      session.mintTime = session.stage.start_time;
+      session.step = "amount";
+      await ctx.reply(
+        `Selected stage: ${session.stage.label}\nMint time: ${session.mintTime}\n\nEnter the number of NFT(s) to mint per wallet.`,
       );
       return;
     }
@@ -520,9 +613,9 @@ bot.on("message:text", async (ctx) => {
         session.slug,
         session.quantity,
         session.chain,
-        chatId,
         undefined,
         session.stage,
+        ctx.reply.bind(ctx),
       );
       await reportResults(
         ctx.reply.bind(ctx),
