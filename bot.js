@@ -232,8 +232,14 @@ function formatStageList(stages) {
 }
 
 async function scheduleFundMintTransfer(ctx, chatId, session) {
-  const { encryptedKeys, encryptedFundingKey, mintTime } = session;
-  if (!encryptedKeys?.length || !encryptedFundingKey || !mintTime) {
+  const { encryptedKeys, encryptedFundingKey, fundingAmount, mintTime } =
+    session;
+  if (
+    !encryptedKeys?.length ||
+    !encryptedFundingKey ||
+    !fundingAmount ||
+    !mintTime
+  ) {
     await ctx.reply(
       "Wallet or stage data missing. Please start the flow again.",
     );
@@ -257,6 +263,7 @@ async function scheduleFundMintTransfer(ctx, chatId, session) {
       destination: session.destination,
       slug: session.slug,
       quantity: session.quantity,
+      fundingAmount,
       chain: session.chain,
       mintTime: new Date(),
       stage: session.stage,
@@ -272,6 +279,7 @@ async function scheduleFundMintTransfer(ctx, chatId, session) {
     destination: session.destination,
     slug: session.slug,
     quantity: session.quantity,
+    fundingAmount,
     chain: session.chain,
     mintTime: mintTimeDate,
     stage: session.stage,
@@ -544,11 +552,26 @@ bot.on("message:text", async (ctx) => {
 
     try {
       session.encryptedFundingKey = encryptPrivateKey(text);
-      await scheduleFundMintTransfer(ctx, chatId, session);
+      session.step = "fundingAmount";
+      await ctx.reply(
+        "Enter the ETH amount to send to each mint wallet (for example: 0.0012).",
+      );
     } catch (error) {
       await ctx.reply(`Could not protect the funding key: ${error.message}`);
       clearSession(chatId);
     }
+    return;
+  }
+
+  if (session.step === "fundingAmount") {
+    const fundingAmount = Number(text);
+    if (!Number.isFinite(fundingAmount) || fundingAmount <= 0) {
+      await ctx.reply("Please enter a valid positive ETH funding amount.");
+      return;
+    }
+
+    session.fundingAmount = text;
+    await scheduleFundMintTransfer(ctx, chatId, session);
     return;
   }
 
