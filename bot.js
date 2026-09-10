@@ -249,8 +249,19 @@ async function scheduleFundMintTransfer(ctx, chatId, session) {
 
   if (Number.isNaN(mintTimeDate.getTime()) || fundingTime <= new Date()) {
     await ctx.reply(
-      "This stage starts too soon to schedule funding. Select a future stage with at least 10 seconds of lead time.",
+      "This stage starts too soon to schedule funding. Starting the fund, mint, and transfer flow immediately.",
     );
+    await agenda.now("fundMintTransfer", {
+      encryptedKeys,
+      encryptedFundingKey,
+      destination: session.destination,
+      slug: session.slug,
+      quantity: session.quantity,
+      chain: session.chain,
+      mintTime: new Date(),
+      stage: session.stage,
+      chatId,
+    });
     clearSession(chatId);
     return;
   }
