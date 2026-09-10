@@ -1,10 +1,23 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
-import { sleep } from "./helpers.js";
-import { getMintPayload, sendTx, waitForMint } from "./mint.js";
-import { BASE_URL, DROP, WALLETS } from "./variables.js";
+import { getMintPayload } from "./lib/openseaApi.js";
+import { prepareWallet, sendTx } from "./lib/walletMint.js";
+import { waitForMint } from "./mint.js";
+import { BASE_URL } from "./variables.js";
 
 dotenv.config();
+
+const sleep = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+const DROP = {
+  rpcUrl: process.env.DROP_RPC_URL,
+  slug: process.env.DROP_SLUG,
+  chain: process.env.DROP_CHAIN,
+};
+const WALLETS = (process.env.WALLET_PRIVATE_KEYS || "")
+  .split(",")
+  .map((privateKey) => privateKey.trim())
+  .filter(Boolean);
 
 const provider = new ethers.JsonRpcProvider(DROP.rpcUrl);
 const FUNDING_AMOUNT = ethers.parseEther("0.0012");
@@ -120,9 +133,13 @@ async function transferNFT(walletAddress, privateKey, asset) {
 
 async function mintAndTransferWallet(privateKey) {
   const walletAddress = new ethers.Wallet(privateKey).address;
+  const walletData = await prepareWallet(privateKey, provider);
   const mintResult = await sendTx(
-    await getMintPayload(walletAddress),
+    await getMintPayload(walletAddress, 1, DROP.slug),
     privateKey,
+    provider,
+    walletData.chainId,
+    walletData.nonce,
   );
   if (!mintResult.success) {
     throw new Error(`Mint transaction failed for ${walletAddress}`);
@@ -148,9 +165,14 @@ async function main() {
     `Funding ${walletAddresses.length} wallet(s) at ${fundingTime.toISOString()}`,
   );
 
-  await waitForMint(fundingTime.toISOString());
+  await waitForMint(
+    fundingTime.toISOString(),
+    DROP.slug,
+    undefined,
+    async () => {},
+  );
   await fundWallets(walletAddresses);
-  await waitForMint(MINT_TIME_ISO);
+  await waitForMint(MINT_TIME_ISO, DROP.slug, undefined, async () => {});
 
   const results = await Promise.allSettled(
     WALLETS.map((privateKey) => mintAndTransferWallet(privateKey)),

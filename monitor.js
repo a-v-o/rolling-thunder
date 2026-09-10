@@ -3,7 +3,8 @@ import { RPC } from "./variables.js";
 import { pollAllTrackedWallets } from "./lib/eventPoller.js";
 import { getBotWallets } from "./lib/walletStorage.js";
 import { getDecryptedKeys } from "./lib/utils.js";
-import { getMintPayload, sendTx, prepareWallet, getDrop } from "./mint.js";
+import { getMintPayload, getDrop } from "./lib/openseaApi.js";
+import { sendTx, prepareWallet } from "./lib/walletMint.js";
 import { bot } from "./bot.js";
 import { agenda } from "./agenda.js";
 
