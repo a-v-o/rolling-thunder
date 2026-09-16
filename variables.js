@@ -9,6 +9,7 @@ export const RPC = {
   robinhood: process.env.ROBINHOOD_RPC_URL,
   base: process.env.BASE_RPC_URL,
   ink: process.env.INK_RPC_URL,
+  arc: process.env.ARC_RPC_URL
 };
 
 export const SDK_CHAINS = {
@@ -16,4 +17,5 @@ export const SDK_CHAINS = {
   robinhood: Chain.Robinhood,
   base: Chain.Base,
   ink: Chain.Ink,
+  arc: Chain.Arc
 };
