@@ -30,6 +30,15 @@ import {
 } from "./monitor.js";
 import { registerMintJob } from "./lib/mintJob.js";
 import { registerFundMintTransferJob } from "./lib/fundMintJob.js";
+import {
+  executeContractFunction,
+  fetchContractAbi,
+  formatContractFunctions,
+  getMintFunctions,
+  parseContractArguments,
+} from "./lib/contractMint.js";
+import { ethers } from "ethers";
+import { RPC } from "./variables.js";
 
 dotenv.config();
 
@@ -87,6 +96,12 @@ const FLOW_CONFIG = {
     nextStep: "slug",
     nextPrompt: "Enter the NFT's OpenSea slug.",
   },
+  contractMint: {
+    chainPrompt:
+      "Now send the target chain for contract minting (ethereum, robinhood, base, ink).",
+    nextStep: "contract",
+    nextPrompt: "Send the NFT contract address.",
+  },
 };
 
 const mainMenu = new Menu("main-menu");
@@ -98,6 +113,7 @@ for (const label of [
   "List",
   "Track",
   "Fund, Mint & Transfer",
+  "Contract Mint",
 ]) {
   mainMenu
     .text(label, async (ctx) => {
@@ -106,7 +122,9 @@ for (const label of [
       const type =
         label === "Fund, Mint & Transfer"
           ? "fundMintTransfer"
-          : label.toLowerCase();
+          : label === "Contract Mint"
+            ? "contractMint"
+            : label.toLowerCase();
       startSession(chatId, type);
       const prompt =
         label === "Track"
@@ -385,6 +403,13 @@ bot.on("message:text", async (ctx) => {
   if (session.step === "chain") {
     session.chain = text.toLowerCase();
 
+    if (session.type === "contractMint" && !RPC[session.chain]) {
+      await ctx.reply(
+        `Unsupported chain or missing RPC configuration: ${session.chain}.`,
+      );
+      return;
+    }
+
     if (session.type === "track" && session.encryptedKeys?.length > 0) {
       try {
         await saveBotWalletsEncrypted(
@@ -401,6 +426,162 @@ bot.on("message:text", async (ctx) => {
 
     session.step = config.nextStep;
     await ctx.reply(config.nextPrompt);
+    return;
+  }
+
+  if (session.step === "contract") {
+    let provider;
+    try {
+      session.contractAddress = ethers.getAddress(text);
+      provider = new ethers.JsonRpcProvider(RPC[session.chain]);
+      const network = await provider.getNetwork();
+      session.abi = await fetchContractAbi(
+        session.contractAddress,
+        network.chainId,
+      );
+      session.functions = getMintFunctions(session.abi);
+    } catch (error) {
+      await ctx.reply(`Could not load the contract ABI: ${error.message}`);
+      return;
+    }
+
+    if (session.functions.length === 0) {
+      await ctx.reply("No state-changing functions were found in this ABI.");
+      clearSession(chatId);
+      return;
+    }
+
+    session.step = "contractFunction";
+    await ctx.reply(
+      `Available mint functions for ${session.contractAddress}:\n\n` +
+        formatContractFunctions(session.abi) +
+        "\n\nReply with the function number to use.",
+    );
+    return;
+  }
+
+  if (session.step === "contractFunction") {
+    const choice = Number(text);
+    if (
+      !Number.isInteger(choice) ||
+      choice < 1 ||
+      choice > session.functions.length
+    ) {
+      await ctx.reply(
+        `Please enter a number between 1 and ${session.functions.length}.`,
+      );
+      return;
+    }
+
+    session.functionAbi = session.functions[choice - 1];
+    session.step = "contractArguments";
+    const inputs = session.functionAbi.inputs || [];
+    const inputText = inputs.length
+      ? inputs
+          .map(
+            (input, index) =>
+              `${index + 1}. ${input.name || "unnamed"}: ${input.type}`,
+          )
+          .join("\n")
+      : "This function has no parameters.";
+    await ctx.reply(
+      `Selected ${session.functionAbi.name}().\n\n${inputText}\n\n` +
+        (inputs.length
+          ? 'Send the values as a JSON array in the same order, for example: ["1", 2]'
+          : "Reply 'none' to continue, or /cancel to stop."),
+    );
+    return;
+  }
+
+  if (session.step === "contractArguments") {
+    try {
+      session.contractArguments = parseContractArguments(
+        text,
+        session.functionAbi.inputs || [],
+      );
+    } catch (error) {
+      await ctx.reply(error.message);
+      return;
+    }
+
+    if (session.functionAbi.stateMutability === "payable") {
+      session.step = "contractValue";
+      await ctx.reply(
+        "Enter the ETH value to send with this mint (enter 0 for no value).",
+      );
+      return;
+    }
+
+    session.contractValue = "0";
+    session.step = "contractConfirm";
+    await ctx.reply(
+      `Ready to call ${session.functionAbi.name} on ${session.contractAddress}. Reply "confirm" to execute or /cancel to stop.`,
+    );
+    return;
+  }
+
+  if (session.step === "contractValue") {
+    try {
+      const value = Number(text);
+      if (!Number.isFinite(value) || value < 0)
+        throw new Error("Value must be a non-negative ETH amount.");
+      ethers.parseEther(text);
+      session.contractValue = text;
+      session.step = "contractConfirm";
+      await ctx.reply(
+        `Ready to call ${session.functionAbi.name} with ${text} ETH on ${session.contractAddress}. Reply "confirm" to execute or /cancel to stop.`,
+      );
+    } catch (error) {
+      await ctx.reply(`Invalid ETH value: ${error.message}`);
+    }
+    return;
+  }
+
+  if (session.step === "contractConfirm") {
+    if (text.toLowerCase() !== "confirm") {
+      await ctx.reply('Reply "confirm" to execute, or /cancel to stop.');
+      return;
+    }
+
+    try {
+      const privateKeys = getDecryptedKeys(session.encryptedKeys || []);
+      await ctx.reply(
+        `Executing ${session.functionAbi.name} for ${privateKeys.length} wallet(s)...`,
+      );
+      const results = await Promise.all(
+        privateKeys.map(async (privateKey) => {
+          try {
+            return await executeContractFunction({
+              privateKey,
+              chain: session.chain,
+              contractAddress: session.contractAddress,
+              functionAbi: session.functionAbi,
+              args: session.contractArguments,
+              value: session.contractValue,
+            });
+          } catch (error) {
+            return {
+              address: new ethers.Wallet(privateKey).address,
+              success: false,
+              error: error.message,
+            };
+          }
+        }),
+      );
+
+      await ctx.reply(
+        results
+          .map((result) =>
+            result.success
+              ? `Success ${result.address}: ${result.hash}`
+              : `Failed ${result.address}: ${result.error}`,
+          )
+          .join("\n"),
+      );
+    } catch (error) {
+      await ctx.reply(`Contract mint failed: ${error.message}`);
+    }
+    clearSession(chatId);
     return;
   }
 
