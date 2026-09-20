@@ -66,6 +66,7 @@ export async function mintWithWallets(
   chain,
   scheduleTime,
   stage,
+  gasBudgetUsd,
   sendMessage = async () => {},
 ) {
   const { provider, entries } = await prepareMintWallets(privateKeys, chain);
@@ -76,7 +77,7 @@ export async function mintWithWallets(
 
   const mintPromises = entries.map((entry) =>
     entry.ok
-      ? mintWithWallet(entry.wallet, quantity, slug, provider)
+      ? mintWithWallet(entry.wallet, quantity, slug, provider, gasBudgetUsd)
       : Promise.resolve({
           privateKey: entry.privateKey,
           success: false,

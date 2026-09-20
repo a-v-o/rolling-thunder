@@ -9,8 +9,10 @@ import express from "express";
 import { acceptBestOffer, listNfts, transferNFTs } from "./list.js";
 import {
   getDecryptedKeys,
+  getSessionPrivateKeys,
+  parsePrivateKeyLines,
   reportResults,
-  splitMintResults,
+  reportMintResults,
 } from "./lib/utils.js";
 import { agenda } from "./agenda.js";
 import {
@@ -35,7 +37,7 @@ import {
   fetchContractAbi,
   formatContractFunctions,
   getMintFunctions,
-  parseContractArguments,
+  parseContractArgument,
 } from "./lib/contractMint.js";
 import { ethers } from "ethers";
 import { RPC } from "./variables.js";
@@ -285,6 +287,7 @@ async function scheduleFundMintTransfer(ctx, chatId, session) {
       chain: session.chain,
       mintTime: new Date(),
       stage: session.stage,
+      gasBudgetUsd: session.gasBudgetUsd,
       chatId,
     });
     clearSession(chatId);
@@ -301,6 +304,7 @@ async function scheduleFundMintTransfer(ctx, chatId, session) {
     chain: session.chain,
     mintTime: mintTimeDate,
     stage: session.stage,
+    gasBudgetUsd: session.gasBudgetUsd,
     chatId,
   });
 
@@ -320,7 +324,7 @@ async function scheduleFundMintTransfer(ctx, chatId, session) {
  * time is the source of truth.
  */
 async function scheduleMintForStage(ctx, chatId, session) {
-  const { slug, chain, quantity, encryptedKeys, stage } = session;
+  const { slug, chain, quantity, encryptedKeys, stage, gasBudgetUsd } = session;
 
   const scheduleTime = new Date(stage.start_time);
   const firingTime = new Date(scheduleTime);
@@ -342,6 +346,7 @@ async function scheduleMintForStage(ctx, chatId, session) {
     chatId,
     scheduleTime,
     stage,
+    gasBudgetUsd,
   });
 
   const formattedTime = scheduleTime.toLocaleString();
@@ -378,12 +383,7 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (session.step === "wallet") {
-    const keys = text
-      .split("\n")
-      .map((key) => key.trim())
-      .filter((key) => key.length > 0);
-
-    const validKeys = keys.filter((key) => key.length >= 64);
+    const validKeys = parsePrivateKeyLines(text);
 
     if (validKeys.length === 0) {
       await ctx.reply(
@@ -475,6 +475,8 @@ bot.on("message:text", async (ctx) => {
 
     session.functionAbi = session.functions[choice - 1];
     session.step = "contractArguments";
+    session.contractArguments = [];
+    session.contractArgumentIndex = 0;
     const inputs = session.functionAbi.inputs || [];
     const inputText = inputs.length
       ? inputs
@@ -487,21 +489,39 @@ bot.on("message:text", async (ctx) => {
     await ctx.reply(
       `Selected ${session.functionAbi.name}().\n\n${inputText}\n\n` +
         (inputs.length
-          ? 'Send the values as a JSON array in the same order, for example: ["1", 2]'
+          ? `Enter ${inputs[0].name || "parameter 1"} (${inputs[0].type}):`
           : "Reply 'none' to continue, or /cancel to stop."),
     );
     return;
   }
 
   if (session.step === "contractArguments") {
-    try {
-      session.contractArguments = parseContractArguments(
-        text,
-        session.functionAbi.inputs || [],
-      );
-    } catch (error) {
-      await ctx.reply(error.message);
-      return;
+    const inputs = session.functionAbi.inputs || [];
+
+    if (inputs.length === 0) {
+      if (text.trim().toLowerCase() !== "none") {
+        await ctx.reply(
+          "This function does not accept parameters. Reply 'none'.",
+        );
+        return;
+      }
+    } else {
+      const input = inputs[session.contractArgumentIndex];
+      try {
+        session.contractArguments.push(parseContractArgument(text, input));
+      } catch (error) {
+        await ctx.reply(error.message);
+        return;
+      }
+
+      session.contractArgumentIndex += 1;
+      if (session.contractArgumentIndex < inputs.length) {
+        const nextInput = inputs[session.contractArgumentIndex];
+        await ctx.reply(
+          `Enter ${nextInput.name || `parameter ${session.contractArgumentIndex + 1}`} (${nextInput.type}):`,
+        );
+        return;
+      }
     }
 
     if (session.functionAbi.stateMutability === "payable") {
@@ -594,15 +614,17 @@ bot.on("message:text", async (ctx) => {
     session.quantity = text;
 
     if (session.type === "fundMintTransfer") {
-      session.step = "destination";
+      session.step = "gasBudget";
       await ctx.reply(
-        "Enter the destination wallet address for the minted NFT(s).",
+        "Enter the maximum gas budget in USD per wallet (for example: 5), or reply 'none' to use the network default.",
       );
       return;
     }
 
-    session.step = "slug";
-    await ctx.reply("Enter the nft's opensea slug.");
+    session.step = "gasBudget";
+    await ctx.reply(
+      "Enter the maximum gas budget in USD per wallet (for example: 5), or reply 'none' to use the network default.",
+    );
     return;
   }
 
@@ -651,15 +673,14 @@ bot.on("message:text", async (ctx) => {
     }
 
     // session.type === "sell"
-    const encryptedKeys = session.encryptedKeys;
-    if (!encryptedKeys || encryptedKeys.length === 0) {
+    const privateKeys = getSessionPrivateKeys(session);
+    if (!privateKeys) {
       await ctx.reply(
         "Wallet data missing. Please start the mint process again.",
       );
       return;
     }
 
-    const privateKeys = getDecryptedKeys(encryptedKeys);
     const results = await acceptBestOffer(
       privateKeys,
       session.slug,
@@ -672,15 +693,14 @@ bot.on("message:text", async (ctx) => {
 
   if (session.step === "price") {
     session.price = text;
-    const encryptedKeys = session.encryptedKeys;
-    if (!encryptedKeys || encryptedKeys.length === 0) {
+    const privateKeys = getSessionPrivateKeys(session);
+    if (!privateKeys) {
       await ctx.reply(
         "Wallet data missing. Please start the mint process again.",
       );
       return;
     }
 
-    const privateKeys = getDecryptedKeys(encryptedKeys);
     const results = await listNfts(
       privateKeys,
       session.slug,
@@ -694,15 +714,14 @@ bot.on("message:text", async (ctx) => {
 
   if (session.step === "recipient") {
     session.recipientAddress = text;
-    const encryptedKeys = session.encryptedKeys;
-    if (!encryptedKeys || encryptedKeys.length === 0) {
+    const privateKeys = getSessionPrivateKeys(session);
+    if (!privateKeys) {
       await ctx.reply(
         "Wallet data missing. Please start the mint process again.",
       );
       return;
     }
 
-    const privateKeys = getDecryptedKeys(encryptedKeys);
     const results = await transferNFTs(
       privateKeys,
       session.slug,
@@ -720,6 +739,47 @@ bot.on("message:text", async (ctx) => {
     await ctx.reply(
       "Send the funding wallet private key. It will be encrypted for this session and never stored as plain text.",
     );
+    return;
+  }
+
+  if (session.step === "gasBudget") {
+    const budgetText = text.toLowerCase();
+    const skipBudget = budgetText === "none" || budgetText === "skip";
+    if (skipBudget) {
+      session.gasBudgetUsd = undefined;
+    } else {
+      const gasBudgetUsd = Number(text);
+      if (!Number.isFinite(gasBudgetUsd) || gasBudgetUsd <= 0) {
+        await ctx.reply(
+          "Please enter a positive USD gas budget, or reply 'none' to use the network default.",
+        );
+        return;
+      }
+      session.gasBudgetUsd = text;
+    }
+
+    if (session.type === "fundMintTransfer") {
+      session.step = "destination";
+      await ctx.reply(
+        "Enter the destination wallet address for the minted NFT(s).",
+      );
+      return;
+    }
+
+    if (isStageLive(session.stage)) {
+      session.step = "confirmImmediate";
+      await ctx.reply(
+        `${skipBudget ? "Using network fee defaults" : `Gas budget set to $${Number(session.gasBudgetUsd).toFixed(2)} per wallet`}.\n\nThis stage is already live. Fire the mint immediately? (yes/no)`,
+      );
+      return;
+    }
+
+    await ctx.reply(
+      skipBudget
+        ? "Using network fee defaults."
+        : `Gas budget set to $${Number(session.gasBudgetUsd).toFixed(2)} per wallet.`,
+    );
+    await scheduleMintForStage(ctx, chatId, session);
     return;
   }
 
@@ -784,18 +844,10 @@ bot.on("message:text", async (ctx) => {
       return;
     }
 
-    if (isStageLive(session.stage)) {
-      session.step = "confirmImmediate";
-      await ctx.reply(
-        `Selected stage: ${session.stage.label}\n\nThis stage is already live. Fire the mint immediately? (yes/no)`,
-      );
-      return;
-    }
-
-    // Not live yet — schedule automatically for the stage's own start time,
-    // no manual date/time entry needed.
-    await ctx.reply(`Selected stage: ${session.stage.label}`);
-    await scheduleMintForStage(ctx, chatId, session);
+    session.step = "amount";
+    await ctx.reply(
+      `Selected stage: ${session.stage.label}\n\nEnter the number of NFT(s) to mint per wallet.`,
+    );
     return;
   }
 
@@ -812,8 +864,8 @@ bot.on("message:text", async (ctx) => {
       return;
     }
 
-    const encryptedKeys = session.encryptedKeys;
-    if (!encryptedKeys || encryptedKeys.length === 0) {
+    const privateKeys = getSessionPrivateKeys(session);
+    if (!privateKeys) {
       await ctx.reply(
         "Wallet data missing. Please start the mint process again.",
       );
@@ -822,7 +874,6 @@ bot.on("message:text", async (ctx) => {
 
     try {
       await ctx.reply("Starting mint immediately...");
-      const privateKeys = getDecryptedKeys(encryptedKeys);
       const overall = await mintWithWallets(
         privateKeys,
         session.slug,
@@ -830,13 +881,10 @@ bot.on("message:text", async (ctx) => {
         session.chain,
         undefined,
         session.stage,
+        session.gasBudgetUsd,
         ctx.reply.bind(ctx),
       );
-      await reportResults(
-        ctx.reply.bind(ctx),
-        splitMintResults(overall),
-        "Mint",
-      );
+      await reportMintResults(ctx.reply.bind(ctx), overall);
       await ctx.reply("Mint execution completed!");
     } catch (error) {
       await ctx.reply(`Mint failed: ${error.message}`);

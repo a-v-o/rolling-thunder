@@ -1,6 +1,7 @@
 import { ethers } from "ethers";
 import { OpenSeaSDK, TokenStandard } from "@opensea/sdk";
-import { BASE_URL, RPC, SDK_CHAINS } from "./variables.js";
+import { RPC, SDK_CHAINS } from "./variables.js";
+import { getWalletNFTsInCollection } from "./lib/openseaApi.js";
 
 const OPENSEA_API_KEY = process.env.API_KEY;
 
@@ -18,40 +19,6 @@ function sortOffersByPrice(offers) {
     const priceB = BigInt(b.price?.value ?? 0);
     return priceB > priceA ? 1 : priceB < priceA ? -1 : 0;
   });
-}
-
-async function getWalletTokensInCollection(
-  walletAddress,
-  collectionSlug,
-  chain,
-) {
-  const tokenIds = [];
-  let cursor = null;
-
-  do {
-    const url = new URL(
-      `${BASE_URL}/chain/${chain}/account/${walletAddress}/nfts`,
-    );
-    url.searchParams.set("collection", collectionSlug);
-    url.searchParams.set("limit", "200");
-    if (cursor) url.searchParams.set("next", cursor);
-
-    const res = await fetch(url, {
-      headers: { "x-api-key": OPENSEA_API_KEY, accept: "application/json" },
-    });
-    if (!res.ok)
-      throw new Error(
-        `Account NFTs request failed: ${res.status} ${await res.text()}`,
-      );
-
-    const data = await res.json();
-    for (const nft of data.nfts) {
-      tokenIds.push({ tokenId: nft.identifier, contract: nft.contract });
-    }
-    cursor = data.next || null;
-  } while (cursor);
-
-  return tokenIds;
 }
 
 async function getBestOfferForToken(openseaSDK, collectionSlug) {
@@ -89,7 +56,7 @@ function toAssetList(tokens, extra = {}) {
 
 async function prepareWalletAndTokens(pk, provider, collectionSlug, chain) {
   const wallet = new ethers.Wallet(pk, provider);
-  const tokensForCollection = await getWalletTokensInCollection(
+  const tokensForCollection = await getWalletNFTsInCollection(
     wallet.address,
     collectionSlug,
     chain,
