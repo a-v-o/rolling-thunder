@@ -1,7 +1,7 @@
 import { ethers } from "ethers";
 import { RPC } from "./variables.js";
 import { pollAllTrackedWallets } from "./lib/eventPoller.js";
-import { getBotWallets } from "./lib/walletStorage.js";
+import { getBotWallets, getTrackedWallets } from "./lib/walletStorage.js";
 import { getDecryptedKeys } from "./lib/utils.js";
 import { getMintPayload, getDrop } from "./lib/openseaApi.js";
 import { sendTx, prepareWallet } from "./lib/walletMint.js";
@@ -68,12 +68,18 @@ export async function triggerReplayMint(chatId, event) {
       );
       results.push({
         privateKey: pk,
+        address: walletAddress,
         success: true,
         hash: result.hash,
         block: result.block,
       });
     } catch (err) {
-      results.push({ privateKey: pk, success: false, error: err.message });
+      results.push({
+        privateKey: pk,
+        address: new ethers.Wallet(pk).address,
+        success: false,
+        error: err.message,
+      });
     }
   }
 
@@ -83,13 +89,13 @@ export async function triggerReplayMint(chatId, event) {
   for (const r of success) {
     await bot.api.sendMessage(
       chatId,
-      `- ${r.privateKey.slice(0, 12)}... Copy mint triggered and was successful. TX: ${r.hash}`,
+      `- ${r.address} Copy mint triggered and was successful. TX: ${r.hash}`,
     );
   }
   for (const r of fail) {
     await bot.api.sendMessage(
       chatId,
-      `- ${r.privateKey.slice(0, 12)}... Copy mint triggered but failed. Reason: ${r.error}`,
+      `- ${r.address} Copy mint triggered but failed. Reason: ${r.error}`,
     );
   }
 }
@@ -140,7 +146,6 @@ export async function stopMonitoring(chatId) {
 }
 
 export async function resumeActiveMonitors() {
-  const { getTrackedWallets } = await import("./lib/walletStorage.js");
   const wallets = await getTrackedWallets(null);
   if (!wallets || wallets.length === 0) return;
 

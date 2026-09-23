@@ -6,7 +6,8 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "dev": "nodemon bot.js"
+    "dev": "nodemon bot.js",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@agendajs/mongo-backend": "^4.0.3",

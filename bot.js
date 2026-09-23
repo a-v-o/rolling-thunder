@@ -66,8 +66,8 @@ const FLOW_CONFIG = {
   mint: {
     chainPrompt:
       "Now send the target chain for minting (for example: ethereum, robinhood, base, ink).",
-    nextStep: "amount",
-    nextPrompt: "Enter the amount of nft's you'd like to mint.",
+    nextStep: "slug",
+    nextPrompt: "Enter the nft's opensea slug.",
   },
   sell: {
     chainPrompt:
@@ -665,12 +665,6 @@ bot.on("message:text", async (ctx) => {
       return;
     }
     session.quantity = text;
-
-    if (session.type === "fundMintTransfer") {
-      session.step = "gasBudget";
-      await ctx.reply(GAS_BUDGET_PROMPT);
-      return;
-    }
 
     session.step = "gasBudget";
     await ctx.reply(GAS_BUDGET_PROMPT);

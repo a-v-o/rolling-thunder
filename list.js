@@ -2,6 +2,7 @@ import { ethers } from "ethers";
 import { OpenSeaSDK, TokenStandard } from "@opensea/sdk";
 import { RPC, SDK_CHAINS } from "./variables.js";
 import { getWalletNFTsInCollection } from "./lib/openseaApi.js";
+import { getEthUsdRate } from "./lib/walletMint.js";
 
 const OPENSEA_API_KEY = process.env.API_KEY;
 
@@ -185,17 +186,6 @@ async function getFloorPrice(openseaSDK, collectionSlug) {
   }
 
   return floorPrice;
-}
-
-async function getEthUsdRate() {
-  const res = await fetch(
-    "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd",
-  );
-  if (!res.ok) throw new Error(`Failed to fetch ETH/USD rate: ${res.status}`);
-  const data = await res.json();
-  const rate = data?.ethereum?.usd;
-  if (!rate) throw new Error("ETH/USD rate not found in response");
-  return rate;
 }
 
 async function resolveListingAmountEth(openseaSDK, collectionSlug, price) {
