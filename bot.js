@@ -10,6 +10,7 @@ import { acceptBestOffer, listNfts, transferNFTs } from "./list.js";
 import {
   getDecryptedKeys,
   getSessionPrivateKeys,
+  parseGasBudgetInput,
   parsePrivateKeyLines,
   reportResults,
   reportMintResults,
@@ -21,8 +22,8 @@ import {
   getTrackedWallets,
   deactivateTrackedWallets,
   deactivateSpecificWallets,
-  reactivateTrackedWallets,
-  getInactiveTrackedWallets,
+  activateTrackedWalletChains,
+  deactivateTrackedWalletChains,
   clearBotWallets,
 } from "./lib/walletStorage.js";
 import {
@@ -106,7 +107,33 @@ const FLOW_CONFIG = {
   },
 };
 
+const MISSING_WALLET_MESSAGE =
+  "Wallet data missing. Please start the mint process again.";
+const GAS_BUDGET_PROMPT =
+  "Enter the maximum gas budget in USD per wallet (for example: 5), or reply 'none' to use the network default.";
+
 const mainMenu = new Menu("main-menu");
+
+function getFlowType(label) {
+  if (label === "Fund, Mint & Transfer") return "fundMintTransfer";
+  if (label === "Contract Mint") return "contractMint";
+  return label.toLowerCase();
+}
+
+function getPrivateKeyPrompt(label) {
+  return label === "Track"
+    ? "Send your bot private key(s) for replay minting, one per line.\nSend /cancel to stop."
+    : "Please send your private key(s), one per line.\nSend /cancel to stop.";
+}
+
+async function requireWalletKeys(ctx, session) {
+  const privateKeys = getSessionPrivateKeys(session);
+  if (!privateKeys) {
+    await ctx.reply(MISSING_WALLET_MESSAGE);
+    return null;
+  }
+  return privateKeys;
+}
 
 for (const label of [
   "Mint",
@@ -121,18 +148,9 @@ for (const label of [
     .text(label, async (ctx) => {
       const chatId = ctx.chat?.id;
       if (!chatId) return;
-      const type =
-        label === "Fund, Mint & Transfer"
-          ? "fundMintTransfer"
-          : label === "Contract Mint"
-            ? "contractMint"
-            : label.toLowerCase();
-      startSession(chatId, type);
-      const prompt =
-        label === "Track"
-          ? "Send your bot private key(s) for replay minting, one per line.\nSend /cancel to stop."
-          : "Please send your private key(s), one per line.\nSend /cancel to stop.";
-      await ctx.reply(prompt);
+
+      startSession(chatId, getFlowType(label));
+      await ctx.reply(getPrivateKeyPrompt(label));
     })
     .row();
 }
@@ -172,19 +190,80 @@ bot.command("wallets", async (ctx) => {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const active = await getTrackedWallets(chatId);
-  const inactive = await getInactiveTrackedWallets(chatId);
-  if (active.length === 0 && inactive.length === 0) {
+  if (active.length === 0) {
     await ctx.reply("No wallets being tracked. Use the Track menu to start.");
     return;
   }
   let msg = "";
   if (active.length > 0) {
-    msg += `Active wallets:\n${active.map((w) => `- ${w.address} (${w.chain})`).join("\n")}\n`;
-  }
-  if (inactive.length > 0) {
-    msg += `\nInactive wallets:\n${inactive.map((w) => `- ${w.address} (${w.chain})`).join("\n")}`;
+    msg += `Active wallets:\n${active
+      .map((w) => {
+        const subscription = w.subscriptions.find(
+          (item) => item.chatId === String(chatId),
+        );
+        return `- ${w.address} (${subscription?.chains.join(", ") || "no chains"})`;
+      })
+      .join("\n")}\n`;
   }
   await ctx.reply(msg);
+});
+
+function parseChainWalletCommand(ctx) {
+  const lines = ctx.match?.toString().trim().split(/\s+/);
+  if (!lines || lines.length < 2) return null;
+  return { chain: lines[0].toLowerCase(), addresses: lines.slice(1) };
+}
+
+bot.command("activateChain", async (ctx) => {
+  const chatId = ctx.chat?.id;
+  const command = parseChainWalletCommand(ctx);
+  if (!chatId || !command) {
+    await ctx.reply(
+      "Usage: /activateChain <chain> <wallet address> [wallet address ...]",
+    );
+    return;
+  }
+  if (!RPC[command.chain]) {
+    await ctx.reply(`Unsupported chain: ${command.chain}`);
+    return;
+  }
+
+  try {
+    const count = await activateTrackedWalletChains(
+      chatId,
+      command.addresses,
+      command.chain,
+    );
+    await ctx.reply(`Activated ${command.chain} for ${count} wallet(s).`);
+  } catch (error) {
+    await ctx.reply(`Could not activate chain: ${error.message}`);
+  }
+});
+
+bot.command("deactivateChain", async (ctx) => {
+  const chatId = ctx.chat?.id;
+  const command = parseChainWalletCommand(ctx);
+  if (!chatId || !command) {
+    await ctx.reply(
+      "Usage: /deactivateChain <chain> <wallet address> [wallet address ...]",
+    );
+    return;
+  }
+  if (!RPC[command.chain]) {
+    await ctx.reply(`Unsupported chain: ${command.chain}`);
+    return;
+  }
+
+  try {
+    const count = await deactivateTrackedWalletChains(
+      chatId,
+      command.addresses,
+      command.chain,
+    );
+    await ctx.reply(`Deactivated ${command.chain} for ${count} wallet(s).`);
+  } catch (error) {
+    await ctx.reply(`Could not deactivate chain: ${error.message}`);
+  }
 });
 
 bot.command("unschedule", async (ctx) => {
@@ -214,28 +293,6 @@ bot.command("unschedule", async (ctx) => {
     "data.slug": slug,
   });
   await ctx.reply(`Canceled ${jobs.length} scheduled mint(s) for "${slug}".`);
-});
-
-bot.command("resumetracking", async (ctx) => {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-
-  const args = ctx.match?.toString().trim();
-  let count;
-  if (args) {
-    // Resume specific wallets
-    const addresses = args.split("\n").map((a) => a.trim());
-    count = await reactivateTrackedWallets(chatId, addresses);
-  } else {
-    // Resume all inactive wallets
-    count = await reactivateTrackedWallets(chatId);
-  }
-
-  if (count === 0) {
-    await ctx.reply("No inactive wallets to resume.");
-  } else {
-    await ctx.reply(`Resumed tracking ${count} wallet(s).`);
-  }
 });
 
 function formatStageList(stages) {
@@ -412,11 +469,7 @@ bot.on("message:text", async (ctx) => {
 
     if (session.type === "track" && session.encryptedKeys?.length > 0) {
       try {
-        await saveBotWalletsEncrypted(
-          chatId,
-          session.encryptedKeys,
-          session.chain,
-        );
+        await saveBotWalletsEncrypted(chatId, session.encryptedKeys);
       } catch (err) {
         await ctx.reply(`Failed to save bot wallets: ${err.message}`);
         clearSession(chatId);
@@ -615,16 +668,12 @@ bot.on("message:text", async (ctx) => {
 
     if (session.type === "fundMintTransfer") {
       session.step = "gasBudget";
-      await ctx.reply(
-        "Enter the maximum gas budget in USD per wallet (for example: 5), or reply 'none' to use the network default.",
-      );
+      await ctx.reply(GAS_BUDGET_PROMPT);
       return;
     }
 
     session.step = "gasBudget";
-    await ctx.reply(
-      "Enter the maximum gas budget in USD per wallet (for example: 5), or reply 'none' to use the network default.",
-    );
+    await ctx.reply(GAS_BUDGET_PROMPT);
     return;
   }
 
@@ -673,13 +722,8 @@ bot.on("message:text", async (ctx) => {
     }
 
     // session.type === "sell"
-    const privateKeys = getSessionPrivateKeys(session);
-    if (!privateKeys) {
-      await ctx.reply(
-        "Wallet data missing. Please start the mint process again.",
-      );
-      return;
-    }
+    const privateKeys = await requireWalletKeys(ctx, session);
+    if (!privateKeys) return;
 
     const results = await acceptBestOffer(
       privateKeys,
@@ -693,13 +737,8 @@ bot.on("message:text", async (ctx) => {
 
   if (session.step === "price") {
     session.price = text;
-    const privateKeys = getSessionPrivateKeys(session);
-    if (!privateKeys) {
-      await ctx.reply(
-        "Wallet data missing. Please start the mint process again.",
-      );
-      return;
-    }
+    const privateKeys = await requireWalletKeys(ctx, session);
+    if (!privateKeys) return;
 
     const results = await listNfts(
       privateKeys,
@@ -714,13 +753,8 @@ bot.on("message:text", async (ctx) => {
 
   if (session.step === "recipient") {
     session.recipientAddress = text;
-    const privateKeys = getSessionPrivateKeys(session);
-    if (!privateKeys) {
-      await ctx.reply(
-        "Wallet data missing. Please start the mint process again.",
-      );
-      return;
-    }
+    const privateKeys = await requireWalletKeys(ctx, session);
+    if (!privateKeys) return;
 
     const results = await transferNFTs(
       privateKeys,
@@ -743,19 +777,23 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (session.step === "gasBudget") {
-    const budgetText = text.toLowerCase();
-    const skipBudget = budgetText === "none" || budgetText === "skip";
-    if (skipBudget) {
-      session.gasBudgetUsd = undefined;
-    } else {
-      const gasBudgetUsd = Number(text);
-      if (!Number.isFinite(gasBudgetUsd) || gasBudgetUsd <= 0) {
-        await ctx.reply(
-          "Please enter a positive USD gas budget, or reply 'none' to use the network default.",
-        );
-        return;
-      }
-      session.gasBudgetUsd = text;
+    let parsedBudget;
+    try {
+      parsedBudget = parseGasBudgetInput(text);
+    } catch (error) {
+      await ctx.reply(error.message);
+      return;
+    }
+
+    const { skipBudget, gasBudgetUsd } = parsedBudget;
+    session.gasBudgetUsd = gasBudgetUsd;
+
+    if (!session.stage) {
+      await ctx.reply(
+        "No mint stage selected. Please start the mint flow again.",
+      );
+      clearSession(chatId);
+      return;
     }
 
     if (session.type === "fundMintTransfer") {
@@ -768,8 +806,11 @@ bot.on("message:text", async (ctx) => {
 
     if (isStageLive(session.stage)) {
       session.step = "confirmImmediate";
+      const budgetSummary = skipBudget
+        ? "Using network fee defaults"
+        : `Gas budget set to $${Number(session.gasBudgetUsd).toFixed(2)} per wallet`;
       await ctx.reply(
-        `${skipBudget ? "Using network fee defaults" : `Gas budget set to $${Number(session.gasBudgetUsd).toFixed(2)} per wallet`}.\n\nThis stage is already live. Fire the mint immediately? (yes/no)`,
+        `${budgetSummary}.\n\nThis stage is already live. Fire the mint immediately? (yes/no)`,
       );
       return;
     }
@@ -829,9 +870,7 @@ bot.on("message:text", async (ctx) => {
 
     const encryptedKeys = session.encryptedKeys;
     if (!encryptedKeys || encryptedKeys.length === 0) {
-      await ctx.reply(
-        "Wallet data missing. Please start the mint process again.",
-      );
+      await ctx.reply(MISSING_WALLET_MESSAGE);
       return;
     }
 
@@ -864,13 +903,8 @@ bot.on("message:text", async (ctx) => {
       return;
     }
 
-    const privateKeys = getSessionPrivateKeys(session);
-    if (!privateKeys) {
-      await ctx.reply(
-        "Wallet data missing. Please start the mint process again.",
-      );
-      return;
-    }
+    const privateKeys = await requireWalletKeys(ctx, session);
+    if (!privateKeys) return;
 
     try {
       await ctx.reply("Starting mint immediately...");

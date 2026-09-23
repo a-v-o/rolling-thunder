@@ -11,6 +11,8 @@ This directory contains a small Telegram bot that forwards minting commands to t
 - `/mint`
 - `/list`
 - `/clear`
+- `/activateChain <chain> <wallet address> [wallet address ...]`
+- `/deactivateChain <chain> <wallet address> [wallet address ...]`
 
 ## Environment
 

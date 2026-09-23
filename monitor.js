@@ -103,12 +103,13 @@ async function pollWalletsHandler(job) {
     if (events.length === 0) return;
 
     const seen = new Set();
-    for (const event of events) {
+    for (const { chatId: eventChatId, event } of events) {
       const key = `${event.collectionSlug}-${event.chain}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const chatKey = `${eventChatId}-${key}`;
+      if (seen.has(chatKey)) continue;
+      seen.add(chatKey);
 
-      await triggerReplayMint(chatId, event);
+      await triggerReplayMint(eventChatId, event);
     }
   } catch (err) {
     console.error(`Poll failed for chat ${chatId}:`, err);
@@ -143,7 +144,13 @@ export async function resumeActiveMonitors() {
   const wallets = await getTrackedWallets(null);
   if (!wallets || wallets.length === 0) return;
 
-  const chatIds = [...new Set(wallets.map((w) => w.chatId))];
+  const chatIds = [
+    ...new Set(
+      wallets.flatMap((wallet) =>
+        wallet.subscriptions.map((subscription) => subscription.chatId),
+      ),
+    ),
+  ];
 
   for (const chatId of chatIds) {
     try {
